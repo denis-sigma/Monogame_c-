@@ -23,8 +23,13 @@ public class Player
     private Texture2D? _runSpriteSheet;
     private Texture2D? _fightSpriteSheet;
     private Texture2D? _webGunSpriteSheet;
+    private Texture2D? _webProjectileTexture;
+    private Texture2D? _webImpactTexture;
+    private Texture2D? _webbedTexture;
     private Texture2D? _crouchTexture;
+    private Texture2D? _jumpTexture;
     private readonly List<Texture2D> _walkTextures = new List<Texture2D>();
+    private readonly List<Texture2D> _fightTextures = new List<Texture2D>();
     private readonly List<Texture2D> _sprintTextures = new List<Texture2D>();
     private Vector2 _position;
     private Vector2 _velocity;
@@ -41,13 +46,19 @@ public class Player
     private const float AttackFrameTime = 0.06f;
     private const float WebShootFrameTime = 0.07f;
     private const float WebProjectileSpeed = 420f;
-    private const float WebProjectileLife = 0.8f;
+    private const float WebProjectileLife = 2.3f;
     private const float WebImpactDuration = 0.12f;
+    private const float WebWorldBoundsPadding = 96f;
+    private const int WebDamage = 1;
     private const string SpriteSourcePath = @"c:\Users\user\Desktop\спрайты\run.png";
     private const string FightSpriteSourcePath = @"c:\Users\user\Desktop\спрайты\fight.png";
     private const string WebGunSpriteSourcePath = @"c:\Users\user\Desktop\спрайты\webgun.png";
+    private const string WebProjectileSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerWeb\sprite_10.png";
+    private const string WebImpactSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerWeb\sprite_2.png";
     private const string CrouchSpriteSourcePath = @"c:\Users\user\Desktop\спрайт\уклон.png";
+    private const string JumpSpriteSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerJump\sprite_10.png";
     private const string WalkFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerWalkFrames";
+    private const string FightFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerFightFrames";
     private const string SprintFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\PlayerSprintFrames";
 
     private List<Rectangle> _runFrames = new List<Rectangle>();
@@ -73,14 +84,60 @@ public class Player
     private bool _hasWorldBounds;
     private bool _hasHorizontalPathY;
     private float _horizontalPathY;
+    private float _verticalVelocity;
+    private bool _isJumping;
     private float _hitFlashTimer;
+    private float _stamina;
+    private bool _isExhausted;
+    private float _webbedTimer;
+    private int _webShotsRemaining;
+    private float _webReloadTimer;
+    private bool _meleeDamageAppliedThisAttack;
+    private int _pendingHitsFromBandits;
     private const float HitFlashDuration = 0.18f;
+    private const float JumpVelocity = -560f;
+    private const float Gravity = 1800f;
+    private const int MaxWebShots = 3;
+    private const float WebReloadDuration = 4f;
+    private const float MaxStamina = 100f;
+    private const float SprintStaminaDrainPerSecond = 28f;
+    private const float AttackStaminaDrainPerSecond = 35f;
+    private const float StaminaRecoveryPerSecond = 20f;
+    private const float ExhaustedRecoveryThreshold = 28f;
+    private const float WorldRightMovePadding = 360f;
+    private const string WebbedSpriteSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomWebFrames\sprite_6.png";
 
     public Vector2 Position => _position;
+    public float VisualHeight => GetStandingFrameSize().Y * PlayerScale;
+    public bool IsJumping => _isJumping;
+    public bool IsAttacking => _isAttacking;
+    public bool IsSprinting => _isSprinting;
+    public bool IsCrouching => _isCrouching;
+    public bool IsWebbed => _webbedTimer > 0f;
+    public float Stamina01 => MaxStamina <= 0f ? 0f : MathHelper.Clamp(_stamina / MaxStamina, 0f, 1f);
+    public float WebMeter01
+    {
+        get
+        {
+            if (_webShotsRemaining > 0)
+            {
+                return _webShotsRemaining / (float)MaxWebShots;
+            }
+
+            if (_webReloadTimer <= 0f)
+            {
+                return 0f;
+            }
+
+            return MathHelper.Clamp(1f - (_webReloadTimer / WebReloadDuration), 0f, 1f);
+        }
+    }
 
     public Player(Vector2 startPosition)
     {
         _position = startPosition;
+        _stamina = MaxStamina;
+        _webShotsRemaining = MaxWebShots;
     }
 
     public void LoadContent(GraphicsDevice graphicsDevice)
@@ -90,7 +147,11 @@ public class Player
         var outputRunPath = Path.Combine(AppContext.BaseDirectory, "Content", "run.png");
         var outputFightPath = Path.Combine(AppContext.BaseDirectory, "Content", "fight.png");
         var outputWebGunPath = Path.Combine(AppContext.BaseDirectory, "Content", "webgun.png");
+        var outputWebProjectilePath = Path.Combine(AppContext.BaseDirectory, "Content", "web-projectile.png");
+        var outputWebImpactPath = Path.Combine(AppContext.BaseDirectory, "Content", "web-impact.png");
+        var outputWebbedPath = Path.Combine(AppContext.BaseDirectory, "Content", "player-webbed.png");
         var outputCrouchPath = Path.Combine(AppContext.BaseDirectory, "Content", "crouch.png");
+        var outputJumpPath = Path.Combine(AppContext.BaseDirectory, "Content", "jump.png");
         Directory.CreateDirectory(Path.GetDirectoryName(outputRunPath)!);
 
         if (!File.Exists(outputRunPath) && File.Exists(SpriteSourcePath))
@@ -106,9 +167,25 @@ public class Player
         {
             File.Copy(WebGunSpriteSourcePath, outputWebGunPath, overwrite: true);
         }
+        if (!File.Exists(outputWebProjectilePath) && File.Exists(WebProjectileSourcePath))
+        {
+            File.Copy(WebProjectileSourcePath, outputWebProjectilePath, overwrite: true);
+        }
+        if (!File.Exists(outputWebImpactPath) && File.Exists(WebImpactSourcePath))
+        {
+            File.Copy(WebImpactSourcePath, outputWebImpactPath, overwrite: true);
+        }
+        if (!File.Exists(outputWebbedPath) && File.Exists(WebbedSpriteSourcePath))
+        {
+            File.Copy(WebbedSpriteSourcePath, outputWebbedPath, overwrite: true);
+        }
         if (!File.Exists(outputCrouchPath) && File.Exists(CrouchSpriteSourcePath))
         {
             File.Copy(CrouchSpriteSourcePath, outputCrouchPath, overwrite: true);
+        }
+        if (!File.Exists(outputJumpPath) && File.Exists(JumpSpriteSourcePath))
+        {
+            File.Copy(JumpSpriteSourcePath, outputJumpPath, overwrite: true);
         }
 
         var runPath = outputRunPath;
@@ -163,6 +240,58 @@ public class Player
             }
         }
 
+        var jumpPath = outputJumpPath;
+        if (!File.Exists(jumpPath))
+        {
+            var projectJumpPath = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Content", "jump.png")
+            );
+
+            if (File.Exists(projectJumpPath))
+            {
+                jumpPath = projectJumpPath;
+            }
+        }
+
+        var webProjectilePath = outputWebProjectilePath;
+        if (!File.Exists(webProjectilePath))
+        {
+            var projectWebProjectilePath = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Content", "web-projectile.png")
+            );
+
+            if (File.Exists(projectWebProjectilePath))
+            {
+                webProjectilePath = projectWebProjectilePath;
+            }
+        }
+
+        var webImpactPath = outputWebImpactPath;
+        if (!File.Exists(webImpactPath))
+        {
+            var projectWebImpactPath = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Content", "web-impact.png")
+            );
+
+            if (File.Exists(projectWebImpactPath))
+            {
+                webImpactPath = projectWebImpactPath;
+            }
+        }
+
+        var webbedPath = outputWebbedPath;
+        if (!File.Exists(webbedPath))
+        {
+            var projectWebbedPath = Path.GetFullPath(
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Content", "player-webbed.png")
+            );
+
+            if (File.Exists(projectWebbedPath))
+            {
+                webbedPath = projectWebbedPath;
+            }
+        }
+
         if (!File.Exists(runPath))
         {
             if (_walkTextures.Count == 0)
@@ -204,6 +333,7 @@ public class Player
                 _fightFrames = BuildUniformFrames(_fightSpriteSheet, FightFrameCount);
             }
         }
+        LoadFightTextures(graphicsDevice);
 
         if (File.Exists(webGunPath))
         {
@@ -229,6 +359,34 @@ public class Player
             ApplyBlackKey(_crouchTexture);
         }
 
+        if (File.Exists(jumpPath))
+        {
+            using var jumpStream = File.OpenRead(jumpPath);
+            _jumpTexture = Texture2D.FromStream(graphicsDevice, jumpStream);
+            ApplyBlackKey(_jumpTexture);
+        }
+
+        if (File.Exists(webProjectilePath))
+        {
+            using var webProjectileStream = File.OpenRead(webProjectilePath);
+            _webProjectileTexture = Texture2D.FromStream(graphicsDevice, webProjectileStream);
+            ApplyBlackKey(_webProjectileTexture);
+        }
+
+        if (File.Exists(webImpactPath))
+        {
+            using var webImpactStream = File.OpenRead(webImpactPath);
+            _webImpactTexture = Texture2D.FromStream(graphicsDevice, webImpactStream);
+            ApplyBlackKey(_webImpactTexture);
+        }
+
+        if (File.Exists(webbedPath))
+        {
+            using var webbedStream = File.OpenRead(webbedPath);
+            _webbedTexture = Texture2D.FromStream(graphicsDevice, webbedStream);
+            ApplyBlackKey(_webbedTexture);
+        }
+
         LoadSprintTextures(graphicsDevice);
     }
 
@@ -242,7 +400,10 @@ public class Player
     {
         _horizontalPathY = y;
         _hasHorizontalPathY = true;
-        _position.Y = y;
+        if (!_isJumping)
+        {
+            _position.Y = y;
+        }
     }
 
     public void SetPosition(Vector2 position)
@@ -270,9 +431,34 @@ public class Player
         return new Rectangle(x, y, collisionWidth, collisionHeight);
     }
 
+    public Rectangle GetBulletCollisionBounds()
+    {
+        var bounds = GetCollisionBounds();
+        if (!_isJumping)
+        {
+            return bounds;
+        }
+
+        // В прыжке учитываем только верхнюю часть тела, чтобы снаряды снизу можно было перепрыгнуть.
+        var airHeight = Math.Max(14, bounds.Height / 2);
+        return new Rectangle(bounds.X, bounds.Y, bounds.Width, airHeight);
+    }
+
     public void NotifyHit()
     {
         _hitFlashTimer = HitFlashDuration;
+        _pendingHitsFromBandits++;
+    }
+
+    public void ApplyWebbed(float duration)
+    {
+        _webbedTimer = Math.Max(_webbedTimer, duration);
+        _isAttacking = false;
+        _isWebShooting = false;
+        _isCrouching = false;
+        _isSprinting = false;
+        _isMoving = false;
+        _velocity = Vector2.Zero;
     }
 
     private static void ApplyBlackKey(Texture2D texture)
@@ -491,8 +677,10 @@ public class Player
     public void Update(GameTime gameTime, KeyboardState keyboardState)
     {
         var delta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        UpdateResources(delta);
         var attackPressed = keyboardState.IsKeyDown(Keys.Q) && !_previousKeyboardState.IsKeyDown(Keys.Q);
         var webShootPressed = keyboardState.IsKeyDown(Keys.E) && !_previousKeyboardState.IsKeyDown(Keys.E);
+        var jumpPressed = keyboardState.IsKeyDown(Keys.Space) && !_previousKeyboardState.IsKeyDown(Keys.Space);
 
         if (_hitFlashTimer > 0f)
         {
@@ -501,19 +689,49 @@ public class Player
 
         UpdateWebProjectiles(delta);
 
-        if (!_isAttacking && attackPressed && _fightSpriteSheet != null && _fightFrames.Count > 0)
+        if (_webbedTimer > 0f)
+        {
+            _webbedTimer = Math.Max(0f, _webbedTimer - delta);
+            _velocity = Vector2.Zero;
+            _isMoving = false;
+            _isSprinting = false;
+            _isCrouching = false;
+            _isAttacking = false;
+            _isWebShooting = false;
+            if (_hasHorizontalPathY && !_isJumping)
+            {
+                _position.Y = _horizontalPathY;
+            }
+
+            _previousKeyboardState = keyboardState;
+            return;
+        }
+
+        var canAttack = _fightTextures.Count > 0 || (_fightSpriteSheet != null && _fightFrames.Count > 0);
+        if (!_isAttacking && attackPressed && canAttack && !_isJumping && _stamina > 0f)
         {
             _isAttacking = true;
+            _meleeDamageAppliedThisAttack = false;
             _currentFightFrameIndex = 0;
             _fightAnimationTimer = 0f;
         }
 
-        if (!_isAttacking && !_isWebShooting && webShootPressed && _webGunSpriteSheet != null && _webGunFrames.Count >= 2)
+        if (!_isAttacking &&
+            !_isWebShooting &&
+            webShootPressed &&
+            _webShotsRemaining > 0 &&
+            _webGunSpriteSheet != null &&
+            _webGunFrames.Count >= 2)
         {
             _isWebShooting = true;
             _currentWebShootFrameIndex = 0;
             _webShootAnimationTimer = 0f;
             SpawnWebProjectile();
+            _webShotsRemaining = Math.Max(0, _webShotsRemaining - 1);
+            if (_webShotsRemaining == 0)
+            {
+                _webReloadTimer = WebReloadDuration;
+            }
         }
 
         if (_isAttacking)
@@ -527,7 +745,8 @@ public class Player
             {
                 _fightAnimationTimer -= AttackFrameTime;
                 _currentFightFrameIndex++;
-                if (_currentFightFrameIndex >= _fightFrames.Count)
+                var fightFrameCount = _fightTextures.Count > 0 ? _fightTextures.Count : _fightFrames.Count;
+                if (_currentFightFrameIndex >= Math.Max(1, fightFrameCount))
                 {
                     _currentFightFrameIndex = 0;
                     _isAttacking = false;
@@ -564,7 +783,7 @@ public class Player
         _isMoving = false;
         _isSprinting = false;
         var crouchHeld = keyboardState.IsKeyDown(Keys.LeftControl) || keyboardState.IsKeyDown(Keys.RightControl);
-        _isCrouching = crouchHeld;
+        _isCrouching = crouchHeld && !_isJumping;
 
         if (_isCrouching)
         {
@@ -588,7 +807,7 @@ public class Player
         }
 
         var sprintHeld = keyboardState.IsKeyDown(Keys.LeftShift) || keyboardState.IsKeyDown(Keys.RightShift);
-        _isSprinting = sprintHeld && _isMoving && _sprintTextures.Count > 0;
+        _isSprinting = sprintHeld && _isMoving && _sprintTextures.Count > 0 && _stamina > 0f && !_isExhausted;
 
         // Нормализуем диагональное движение
         if (_velocity.Length() > 0)
@@ -599,15 +818,32 @@ public class Player
 
         _position += _velocity * delta;
 
-        if (_hasWorldBounds)
+        if (jumpPressed && !_isJumping && _hasHorizontalPathY && !_isCrouching)
         {
-            _position.X = MathHelper.Clamp(_position.X, _worldBounds.Left, _worldBounds.Right);
-            _position.Y = MathHelper.Clamp(_position.Y, _worldBounds.Top, _worldBounds.Bottom);
+            _isJumping = true;
+            _verticalVelocity = JumpVelocity;
         }
 
-        if (_hasHorizontalPathY)
+        if (_isJumping)
+        {
+            _verticalVelocity += Gravity * delta;
+            _position.Y += _verticalVelocity * delta;
+            if (_hasHorizontalPathY && _position.Y >= _horizontalPathY)
+            {
+                _position.Y = _horizontalPathY;
+                _verticalVelocity = 0f;
+                _isJumping = false;
+            }
+        }
+        else if (_hasHorizontalPathY)
         {
             _position.Y = _horizontalPathY;
+        }
+
+        if (_hasWorldBounds)
+        {
+            _position.X = MathHelper.Clamp(_position.X, _worldBounds.Left, _worldBounds.Right + WorldRightMovePadding);
+            _position.Y = MathHelper.Clamp(_position.Y, _worldBounds.Top, _worldBounds.Bottom);
         }
 
         var defaultRunFrameCount = _walkTextures.Count > 0 ? _walkTextures.Count : _runFrames.Count;
@@ -629,6 +865,42 @@ public class Player
         }
 
         _previousKeyboardState = keyboardState;
+    }
+
+    private void UpdateResources(float delta)
+    {
+        if (_webReloadTimer > 0f)
+        {
+            _webReloadTimer = Math.Max(0f, _webReloadTimer - delta);
+            if (_webReloadTimer <= 0f)
+            {
+                _webShotsRemaining = MaxWebShots;
+            }
+        }
+
+        var staminaDelta = 0f;
+        if (_isAttacking)
+        {
+            staminaDelta -= AttackStaminaDrainPerSecond * delta;
+        }
+        else if (_isSprinting && _isMoving)
+        {
+            staminaDelta -= SprintStaminaDrainPerSecond * delta;
+        }
+        else
+        {
+            staminaDelta += StaminaRecoveryPerSecond * delta;
+        }
+
+        _stamina = MathHelper.Clamp(_stamina + staminaDelta, 0f, MaxStamina);
+        if (_stamina <= 0.01f)
+        {
+            _isExhausted = true;
+        }
+        else if (_isExhausted && _stamina >= ExhaustedRecoveryThreshold)
+        {
+            _isExhausted = false;
+        }
     }
 
     private void UpdateWebProjectiles(float delta)
@@ -653,14 +925,7 @@ public class Player
             projectile.Position += projectile.Velocity * delta;
             projectile.Life -= delta;
 
-            var hitBounds = _hasWorldBounds && (
-                projectile.Position.X < _worldBounds.Left ||
-                projectile.Position.X > _worldBounds.Right ||
-                projectile.Position.Y < _worldBounds.Top ||
-                projectile.Position.Y > _worldBounds.Bottom
-            );
-
-            if (hitBounds || projectile.Life <= 0f)
+            if (projectile.Life <= 0f)
             {
                 projectile.IsImpact = true;
                 projectile.Velocity = Vector2.Zero;
@@ -672,6 +937,171 @@ public class Player
                 _webProjectiles[i] = projectile;
             }
         }
+    }
+
+    public bool TryHitBandit(Bandit bandit)
+    {
+        if (!bandit.IsAlive)
+        {
+            return false;
+        }
+
+        var hit = false;
+        var banditBounds = bandit.GetCollisionBounds();
+        if (banditBounds.Width <= 0 || banditBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < _webProjectiles.Count; i++)
+        {
+            var projectile = _webProjectiles[i];
+            if (projectile.IsImpact)
+            {
+                continue;
+            }
+
+            var projectileHitBox = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 10f),
+                (int)MathF.Round(projectile.Position.Y - 10f),
+                20,
+                20
+            );
+            if (!projectileHitBox.Intersects(banditBounds))
+            {
+                continue;
+            }
+
+            projectile.IsImpact = true;
+            projectile.Velocity = Vector2.Zero;
+            projectile.ImpactTime = WebImpactDuration;
+            _webProjectiles[i] = projectile;
+            bandit.ApplyDamage(WebDamage);
+            hit = true;
+        }
+
+        hit |= TryDealMeleeDamage(bandit, banditBounds);
+        return hit;
+    }
+
+    public bool TryHitVenom(Venom venom)
+    {
+        if (!venom.IsAlive)
+        {
+            return false;
+        }
+
+        var hit = false;
+        var venomBounds = venom.GetCollisionBounds();
+        if (venomBounds.Width <= 0 || venomBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < _webProjectiles.Count; i++)
+        {
+            var projectile = _webProjectiles[i];
+            if (projectile.IsImpact)
+            {
+                continue;
+            }
+
+            var projectileHitBox = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 10f),
+                (int)MathF.Round(projectile.Position.Y - 10f),
+                20,
+                20
+            );
+            if (!projectileHitBox.Intersects(venomBounds))
+            {
+                continue;
+            }
+
+            projectile.IsImpact = true;
+            projectile.Velocity = Vector2.Zero;
+            projectile.ImpactTime = WebImpactDuration;
+            _webProjectiles[i] = projectile;
+            venom.ApplyDamage(WebDamage);
+            hit = true;
+        }
+
+        hit |= TryDealMeleeDamage(venom, venomBounds);
+        return hit;
+    }
+
+    private bool TryDealMeleeDamage(Bandit bandit, Rectangle banditBounds)
+    {
+        if (!_isAttacking || _meleeDamageAppliedThisAttack)
+        {
+            return false;
+        }
+
+        var fightFrameCount = _fightTextures.Count > 0 ? _fightTextures.Count : _fightFrames.Count;
+        var activeFrame = Math.Max(0, Math.Min(_currentFightFrameIndex, Math.Max(0, fightFrameCount - 1)));
+        var hitWindowStart = Math.Max(1, fightFrameCount / 3);
+        var hitWindowEnd = Math.Max(hitWindowStart, (fightFrameCount * 2) / 3);
+        if (activeFrame < hitWindowStart || activeFrame > hitWindowEnd)
+        {
+            return false;
+        }
+
+        var playerBounds = GetCollisionBounds();
+        var meleeWidth = Math.Max(26, playerBounds.Width / 2);
+        var meleeHeight = Math.Max(24, playerBounds.Height - 8);
+        var meleeX = _direction.X < 0f
+            ? playerBounds.Left - meleeWidth
+            : playerBounds.Right;
+        var meleeY = playerBounds.Y + 4;
+        var meleeBounds = new Rectangle(meleeX, meleeY, meleeWidth, meleeHeight);
+        if (!meleeBounds.Intersects(banditBounds))
+        {
+            return false;
+        }
+
+        _meleeDamageAppliedThisAttack = true;
+        bandit.ApplyDamage(1);
+        return true;
+    }
+
+    private bool TryDealMeleeDamage(Venom venom, Rectangle venomBounds)
+    {
+        if (!_isAttacking || _meleeDamageAppliedThisAttack)
+        {
+            return false;
+        }
+
+        var fightFrameCount = _fightTextures.Count > 0 ? _fightTextures.Count : _fightFrames.Count;
+        var activeFrame = Math.Max(0, Math.Min(_currentFightFrameIndex, Math.Max(0, fightFrameCount - 1)));
+        var hitWindowStart = Math.Max(1, fightFrameCount / 3);
+        var hitWindowEnd = Math.Max(hitWindowStart, (fightFrameCount * 2) / 3);
+        if (activeFrame < hitWindowStart || activeFrame > hitWindowEnd)
+        {
+            return false;
+        }
+
+        var playerBounds = GetCollisionBounds();
+        var meleeWidth = Math.Max(26, playerBounds.Width / 2);
+        var meleeHeight = Math.Max(24, playerBounds.Height - 8);
+        var meleeX = _direction.X < 0f
+            ? playerBounds.Left - meleeWidth
+            : playerBounds.Right;
+        var meleeY = playerBounds.Y + 4;
+        var meleeBounds = new Rectangle(meleeX, meleeY, meleeWidth, meleeHeight);
+        if (!meleeBounds.Intersects(venomBounds))
+        {
+            return false;
+        }
+
+        _meleeDamageAppliedThisAttack = true;
+        venom.ApplyDamage(1);
+        return true;
+    }
+
+    public int ConsumePendingHits()
+    {
+        var result = _pendingHitsFromBandits;
+        _pendingHitsFromBandits = 0;
+        return result;
     }
 
     private void SpawnWebProjectile()
@@ -704,10 +1134,15 @@ public class Player
         return new Vector2(44, 22);
     }
 
-    public void Draw(SpriteBatch spriteBatch, Vector2 cameraPosition)
+    public void Draw(SpriteBatch spriteBatch, Vector2 cameraPosition, float visualYOffset = 0f)
     {
-        var screenPosition = _position - cameraPosition;
+        var visualOffset = new Vector2(0f, visualYOffset);
+        var screenPosition = _position - cameraPosition + visualOffset;
         var effects = _direction.X < 0 ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+        if (_webbedTimer > 0f && _webbedTexture != null)
+        {
+            effects = _direction.X > 0 ? SpriteEffects.FlipHorizontally : SpriteEffects.None;
+        }
         var frame = GetCurrentFrame();
         if (frame.Texture == null)
         {
@@ -728,30 +1163,52 @@ public class Player
             0f
         );
 
-        DrawWebProjectiles(spriteBatch, cameraPosition);
+        DrawWebProjectiles(spriteBatch, cameraPosition, visualOffset);
     }
 
-    private void DrawWebProjectiles(SpriteBatch spriteBatch, Vector2 cameraPosition)
+    private void DrawWebProjectiles(SpriteBatch spriteBatch, Vector2 cameraPosition, Vector2 visualOffset)
     {
         if (_webGunSpriteSheet == null || _webGunFrames.Count < 3) return;
 
         foreach (var projectile in _webProjectiles)
         {
-            var webRect = projectile.IsImpact ? _webImpactRect : _webProjectileRect;
-            if (webRect.Width <= 0 || webRect.Height <= 0)
+            var useCustomProjectile = !projectile.IsImpact && _webProjectileTexture != null;
+            var useCustomImpact = projectile.IsImpact && _webImpactTexture != null;
+
+            if (!useCustomProjectile && !useCustomImpact)
             {
-                webRect = _webGunFrames[2];
+                var webRect = projectile.IsImpact ? _webImpactRect : _webProjectileRect;
+                if (webRect.Width <= 0 || webRect.Height <= 0)
+                {
+                    webRect = _webGunFrames[2];
+                }
+
+                var origin = new Vector2(webRect.Width / 2f, webRect.Height / 2f);
+                var drawPos = projectile.Position - cameraPosition + visualOffset;
+                spriteBatch.Draw(
+                    _webGunSpriteSheet,
+                    new Vector2((float)Math.Round(drawPos.X), (float)Math.Round(drawPos.Y)),
+                    webRect,
+                    Color.White,
+                    projectile.Rotation,
+                    origin,
+                    WebProjectileScale,
+                    SpriteEffects.None,
+                    0f
+                );
+                continue;
             }
 
-            var origin = new Vector2(webRect.Width / 2f, webRect.Height / 2f);
-            var drawPos = projectile.Position - cameraPosition;
+            var texture = projectile.IsImpact ? _webImpactTexture! : _webProjectileTexture!;
+            var customOrigin = new Vector2(texture.Width / 2f, texture.Height / 2f);
+            var customDrawPos = projectile.Position - cameraPosition + visualOffset;
             spriteBatch.Draw(
-                _webGunSpriteSheet,
-                new Vector2((float)Math.Round(drawPos.X), (float)Math.Round(drawPos.Y)),
-                webRect,
+                texture,
+                new Vector2((float)Math.Round(customDrawPos.X), (float)Math.Round(customDrawPos.Y)),
+                null,
                 Color.White,
-                projectile.Rotation,
-                origin,
+                projectile.IsImpact ? 0f : projectile.Rotation,
+                customOrigin,
                 WebProjectileScale,
                 SpriteEffects.None,
                 0f
@@ -767,14 +1224,28 @@ public class Player
         _fightSpriteSheet = null;
         _webGunSpriteSheet?.Dispose();
         _webGunSpriteSheet = null;
+        _webProjectileTexture?.Dispose();
+        _webProjectileTexture = null;
+        _webImpactTexture?.Dispose();
+        _webImpactTexture = null;
+        _webbedTexture?.Dispose();
+        _webbedTexture = null;
         _crouchTexture?.Dispose();
         _crouchTexture = null;
+        _jumpTexture?.Dispose();
+        _jumpTexture = null;
         foreach (var walkTexture in _walkTextures)
         {
             walkTexture.Dispose();
         }
 
         _walkTextures.Clear();
+        foreach (var fightTexture in _fightTextures)
+        {
+            fightTexture.Dispose();
+        }
+
+        _fightTextures.Clear();
         foreach (var sprintTexture in _sprintTextures)
         {
             sprintTexture.Dispose();
@@ -808,6 +1279,31 @@ public class Player
         }
     }
 
+    private void LoadFightTextures(GraphicsDevice graphicsDevice)
+    {
+        if (!Directory.Exists(FightFramesFolderPath))
+        {
+            return;
+        }
+
+        var framePaths = Directory
+            .GetFiles(FightFramesFolderPath, "*.png")
+            .OrderBy(path =>
+            {
+                var name = Path.GetFileNameWithoutExtension(path);
+                var digits = new string(name.Where(char.IsDigit).ToArray());
+                return int.TryParse(digits, out var number) ? number : int.MaxValue;
+            });
+
+        foreach (var framePath in framePaths)
+        {
+            using var stream = File.OpenRead(framePath);
+            var texture = Texture2D.FromStream(graphicsDevice, stream);
+            ApplyBlackKey(texture);
+            _fightTextures.Add(texture);
+        }
+    }
+
     private void LoadSprintTextures(GraphicsDevice graphicsDevice)
     {
         if (!Directory.Exists(SprintFramesFolderPath))
@@ -835,9 +1331,24 @@ public class Player
 
     private (Texture2D? Texture, Rectangle? SourceRect) GetCurrentFrame()
     {
+        if (_webbedTimer > 0f && _webbedTexture != null)
+        {
+            return (_webbedTexture, null);
+        }
+
+        if (_isAttacking && _fightTextures.Count > 0)
+        {
+            return (_fightTextures[Math.Clamp(_currentFightFrameIndex, 0, _fightTextures.Count - 1)], null);
+        }
+
         if (_isAttacking && _fightFrames.Count > 0)
         {
             return (_fightSpriteSheet, _fightFrames[Math.Clamp(_currentFightFrameIndex, 0, _fightFrames.Count - 1)]);
+        }
+
+        if (_isJumping && _jumpTexture != null)
+        {
+            return (_jumpTexture, null);
         }
 
         if (_isWebShooting && _webGunFrames.Count >= 2)
@@ -884,4 +1395,21 @@ public class Player
 
         return new Vector2(frame.Texture.Width, frame.Texture.Height);
     }
+
+    private Vector2 GetStandingFrameSize()
+    {
+        if (_walkTextures.Count > 0)
+        {
+            return new Vector2(_walkTextures[0].Width, _walkTextures[0].Height);
+        }
+
+        if (_runFrames.Count > 0)
+        {
+            var rect = _runFrames[0];
+            return new Vector2(rect.Width, rect.Height);
+        }
+
+        return GetCurrentFrameSize();
+    }
+
 }
