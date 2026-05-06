@@ -20,6 +20,9 @@ public class GameLevel
     private Texture2D? _newYorkTexture;
     private Texture2D? _cityChurchTexture;
     private Texture2D? _thirdMapTexture;
+    private Texture2D? _fourthMapTexture;
+    private Texture2D? _fifthMapTexture;
+    private Texture2D? _sixthMapTexture;
     private Texture2D? _transitionTexture;
     private Texture2D? _uiPixel;
     private Player? _player;
@@ -35,11 +38,15 @@ public class GameLevel
     private float _transitionAlpha;
     private bool _isSecondMapLoaded;
     private bool _isThirdMapLoaded;
+    private bool _isFourthMapLoaded;
+    private bool _isFifthMapLoaded;
+    private bool _isSixthMapLoaded;
     private KeyboardState _previousKeyboardState;
     private float _pathY;
 
     private const float TransitionDuration = 0.9f;
-    private const float RightEdgeTriggerPadding = -320f;
+    private const float RightEdgeTransitionThreshold = 4f;
+    private const float LeftEdgeTransitionThreshold = 180f;
     private const float SpawnPaddingOnNextMap = 60f;
     private const float PathYRatio = 0.94f;
     private const float BottomGroundOffset = 72f;
@@ -52,6 +59,8 @@ public class GameLevel
     private const float HostageSpawnPaddingRight = -28f;
     private const float RescueHoldDuration = 1.2f;
     private const float RescueVisualOffset = 130f;
+    private const float FourthMapRightSpawnOffset = 420f;
+    private const int FourthMapBanditExtraRightBounds = 2400;
     private const string SpriteFolderPath = @"c:\Users\user\Desktop\спрайт";
     private const float MaxPlayerHealth = 100f;
     private const float BanditBulletDamage = MaxPlayerHealth / 20f;
@@ -77,6 +86,19 @@ public class GameLevel
             graphicsDevice,
             "third-map.jpeg",
             @"c:\Users\user\Downloads\церковь.jpeg");
+
+        _fourthMapTexture = LoadTextureWithFallback(
+            graphicsDevice,
+            "city-school.jpeg",
+            @"c:\Users\user\Downloads\city-school.jpeg");
+        _fifthMapTexture = LoadTextureWithFallback(
+            graphicsDevice,
+            "school1.jpeg",
+            @"c:\Users\user\Downloads\school1.jpeg");
+        _sixthMapTexture = LoadTextureWithFallback(
+            graphicsDevice,
+            "schoolMain.jpeg",
+            @"c:\Users\user\Downloads\schoolMain.jpeg");
 
         _transitionTexture = LoadTextureWithFallback(
             graphicsDevice,
@@ -183,13 +205,30 @@ public class GameLevel
 
         if (_transitionState == TransitionState.None)
         {
-            var triggerX = _levelBounds.Right - RightEdgeTriggerPadding;
-            if (!_isSecondMapLoaded && _player.Position.X >= triggerX)
+            var playerBounds = _player.GetCollisionBounds();
+            var reachedRightEdge = playerBounds.Right >= _levelBounds.Right - RightEdgeTransitionThreshold;
+            var reachedLeftEdge = playerBounds.Left <= _levelBounds.Left + LeftEdgeTransitionThreshold;
+            if (CanTransitionToFifthMap() && reachedLeftEdge)
             {
                 _transitionState = TransitionState.FadeIn;
                 _transitionAlpha = 0f;
             }
-            else if (_isSecondMapLoaded && !_isThirdMapLoaded && _player.Position.X >= triggerX)
+            else if (CanTransitionToSixthMap() && reachedRightEdge)
+            {
+                _transitionState = TransitionState.FadeIn;
+                _transitionAlpha = 0f;
+            }
+            else if (!_isSecondMapLoaded && reachedRightEdge)
+            {
+                _transitionState = TransitionState.FadeIn;
+                _transitionAlpha = 0f;
+            }
+            else if (_isSecondMapLoaded && !_isThirdMapLoaded && !_isFourthMapLoaded && !_isFifthMapLoaded && reachedRightEdge)
+            {
+                _transitionState = TransitionState.FadeIn;
+                _transitionAlpha = 0f;
+            }
+            else if (CanTransitionToFourthMap() && reachedRightEdge)
             {
                 _transitionState = TransitionState.FadeIn;
                 _transitionAlpha = 0f;
@@ -198,7 +237,7 @@ public class GameLevel
 
         UpdateTransition(delta);
 
-        if (_isSecondMapLoaded && !_isThirdMapLoaded && _secondMapBandits.Count > 0)
+        if (_isSecondMapLoaded && !_isThirdMapLoaded && !_isFifthMapLoaded && _secondMapBandits.Count > 0)
         {
             foreach (var bandit in _secondMapBandits)
             {
@@ -255,6 +294,22 @@ public class GameLevel
             return true;
         }
 
+        if (keyboardState.IsKeyDown(Keys.D4) && !_previousKeyboardState.IsKeyDown(Keys.D4))
+        {
+            if (!_isSecondMapLoaded)
+            {
+                SwapToSecondMap();
+            }
+
+            if (!_isThirdMapLoaded)
+            {
+                SwapToThirdMap();
+            }
+
+            ForceSwapToFourthMap();
+            return true;
+        }
+
         return false;
     }
 
@@ -271,13 +326,25 @@ public class GameLevel
             if (_transitionAlpha >= 1f)
             {
                 _transitionAlpha = 1f;
-                if (!_isSecondMapLoaded)
+                if (CanTransitionToFifthMap())
+                {
+                    SwapToFifthMap();
+                }
+                else if (CanTransitionToSixthMap())
+                {
+                    SwapToSixthMap();
+                }
+                else if (!_isSecondMapLoaded)
                 {
                     SwapToSecondMap();
                 }
                 else if (!_isThirdMapLoaded)
                 {
                     SwapToThirdMap();
+                }
+                else if (CanTransitionToFourthMap())
+                {
+                    SwapToFourthMap();
                 }
                 _transitionState = TransitionState.FadeOut;
             }
@@ -308,9 +375,14 @@ public class GameLevel
         _player.SetHorizontalPathY(_pathY);
         _player.SetPosition(new Vector2(SpawnPaddingOnNextMap, _pathY));
 
+        var fourthMapBanditBounds = new Rectangle(
+            _levelBounds.X,
+            _levelBounds.Y,
+            _levelBounds.Width + FourthMapBanditExtraRightBounds,
+            _levelBounds.Height);
         foreach (var bandit in _secondMapBandits)
         {
-            bandit.SetWorld(_levelBounds, _pathY);
+            bandit.SetWorld(fourthMapBanditBounds, _pathY);
         }
 
         _cameraPosition = Vector2.Zero;
@@ -337,6 +409,9 @@ public class GameLevel
         _transitionAlpha = 0f;
         _isSecondMapLoaded = false;
         _isThirdMapLoaded = false;
+        _isFourthMapLoaded = false;
+        _isFifthMapLoaded = false;
+        _isSixthMapLoaded = false;
         _rescueHoldTimer = 0f;
         _showRescuePrompt = false;
         if (_hostage != null)
@@ -368,6 +443,124 @@ public class GameLevel
 
         _cameraPosition = Vector2.Zero;
         _isThirdMapLoaded = true;
+        _isFourthMapLoaded = false;
+    }
+
+    private bool CanTransitionToFourthMap()
+    {
+        return _isThirdMapLoaded
+            && !_isFourthMapLoaded
+            && _venom != null
+            && _hostage != null
+            && !_venom.IsAlive
+            && _hostage.IsRescued;
+    }
+
+    private bool CanTransitionToFifthMap()
+    {
+        return _isFourthMapLoaded && !_isFifthMapLoaded;
+    }
+
+    private bool CanTransitionToSixthMap()
+    {
+        return _isFifthMapLoaded && !_isSixthMapLoaded;
+    }
+
+    private void SwapToFourthMap()
+    {
+        if (_fourthMapTexture == null || _player == null || !CanTransitionToFourthMap())
+        {
+            return;
+        }
+
+        _currentMapTexture = _fourthMapTexture;
+        _levelBounds = new Rectangle(0, 0, _currentMapTexture.Width, _currentMapTexture.Height);
+        _pathY = ComputePathY(_currentMapTexture);
+
+        _player.SetWorldBounds(_levelBounds);
+        _player.SetHorizontalPathY(_pathY);
+        _player.SetPosition(new Vector2(_levelBounds.Right + FourthMapRightSpawnOffset, _pathY));
+        var fourthMapBanditBounds = new Rectangle(
+            _levelBounds.X,
+            _levelBounds.Y,
+            _levelBounds.Width + FourthMapBanditExtraRightBounds,
+            _levelBounds.Height);
+        foreach (var bandit in _secondMapBandits)
+        {
+            bandit.SetWorld(fourthMapBanditBounds, _pathY);
+        }
+
+        UpdateCamera();
+        _isThirdMapLoaded = false;
+        _isFourthMapLoaded = true;
+        _isFifthMapLoaded = false;
+    }
+
+    private void ForceSwapToFourthMap()
+    {
+        if (_fourthMapTexture == null || _player == null)
+        {
+            return;
+        }
+
+        _currentMapTexture = _fourthMapTexture;
+        _levelBounds = new Rectangle(0, 0, _currentMapTexture.Width, _currentMapTexture.Height);
+        _pathY = ComputePathY(_currentMapTexture);
+
+        _player.SetWorldBounds(_levelBounds);
+        _player.SetHorizontalPathY(_pathY);
+        _player.SetPosition(new Vector2(_levelBounds.Right + FourthMapRightSpawnOffset, _pathY));
+        foreach (var bandit in _secondMapBandits)
+        {
+            bandit.SetWorld(_levelBounds, _pathY);
+        }
+
+        UpdateCamera();
+        _isFourthMapLoaded = true;
+        _isThirdMapLoaded = false;
+        _isFifthMapLoaded = false;
+        _isSixthMapLoaded = false;
+    }
+
+    private void SwapToFifthMap()
+    {
+        if (_fifthMapTexture == null || _player == null || !CanTransitionToFifthMap())
+        {
+            return;
+        }
+
+        _currentMapTexture = _fifthMapTexture;
+        _levelBounds = new Rectangle(0, 0, _currentMapTexture.Width, _currentMapTexture.Height);
+        _pathY = ComputePathY(_currentMapTexture);
+
+        _player.SetWorldBounds(_levelBounds);
+        _player.SetHorizontalPathY(_pathY);
+        _player.SetPosition(new Vector2(SpawnPaddingOnNextMap, _pathY));
+
+        UpdateCamera();
+        _isFourthMapLoaded = false;
+        _isFifthMapLoaded = true;
+        _isSixthMapLoaded = false;
+    }
+
+    private void SwapToSixthMap()
+    {
+        if (_sixthMapTexture == null || _player == null || !CanTransitionToSixthMap())
+        {
+            return;
+        }
+
+        _currentMapTexture = _sixthMapTexture;
+        _levelBounds = new Rectangle(0, 0, _currentMapTexture.Width, _currentMapTexture.Height);
+        _pathY = ComputePathY(_currentMapTexture);
+
+        _player.SetWorldBounds(_levelBounds);
+        _player.SetHorizontalPathY(_pathY);
+        _player.SetPosition(new Vector2(SpawnPaddingOnNextMap, _pathY));
+
+        _cameraPosition = Vector2.Zero;
+        _isFifthMapLoaded = false;
+        _isSixthMapLoaded = true;
     }
 
     private void UpdateCamera()
@@ -416,7 +609,7 @@ public class GameLevel
         var destinationRect = new Rectangle(0, 0, viewport.Width, viewport.Height);
         spriteBatch.Draw(_currentMapTexture, destinationRect, sourceRect, Color.White);
 
-        if (_isSecondMapLoaded && !_isThirdMapLoaded && _secondMapBandits.Count > 0)
+        if (_isSecondMapLoaded && !_isThirdMapLoaded && !_isFifthMapLoaded && _secondMapBandits.Count > 0)
         {
             foreach (var bandit in _secondMapBandits)
             {
@@ -462,6 +655,9 @@ public class GameLevel
         _newYorkTexture?.Dispose();
         _cityChurchTexture?.Dispose();
         _thirdMapTexture?.Dispose();
+        _fourthMapTexture?.Dispose();
+        _fifthMapTexture?.Dispose();
+        _sixthMapTexture?.Dispose();
         _transitionTexture?.Dispose();
         _uiPixel?.Dispose();
         _rescuePromptTexture?.Dispose();

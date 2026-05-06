@@ -25,6 +25,7 @@ public class Bandit
     private Rectangle _bulletRect;
     private Vector2 _position;
     private Vector2 _spawnPoint;
+    private readonly float _engageOffsetX;
     private Rectangle _worldBounds;
     private float _pathY;
     private float _moveTimer;
@@ -44,14 +45,16 @@ public class Bandit
     private const float Scale = 1.7f;
     private const float MoveSpeed = 70f;
     private const float PatrolRange = 170f;
-    private const float DetectionRange = 460f;
-    private const float ShootRange = 380f;
+    private const float EngageSpread = 520f;
+    private const float EngageStopDistance = 20f;
+    private const float DetectionRange = 2200f;
+    private const float ShootRange = 1800f;
     private const int BurstShotCount = 3;
     private const float BurstShotInterval = 0.18f;
     private const float BurstCooldown = 5f;
     private const float BulletSpeed = 250f;
-    private const float BulletLifetime = 3f;
-    private const float BulletWorldBoundsPadding = 180f;
+    private const float BulletLifetime = 12f;
+    private const float BulletWorldBoundsPadding = 4000f;
     private const float MoveFrameTime = 0.12f;
     private const float ShootFrameTime = 0.09f;
     private const string MoveFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\BanditFrames";
@@ -67,6 +70,9 @@ public class Bandit
         _position = startPosition;
         _spawnPoint = startPosition;
         _pathY = startPosition.Y;
+        // Deterministic per-bandit combat offset so they spread around player instead of stacking.
+        var seed = startPosition.X * 0.037f + startPosition.Y * 0.013f;
+        _engageOffsetX = MathF.Sin(seed) * EngageSpread;
     }
 
     public void LoadContent(GraphicsDevice graphicsDevice)
@@ -171,7 +177,7 @@ public class Bandit
             return;
         }
 
-        UpdateMovement(delta, distanceToPlayer);
+        UpdateMovement(delta, distanceToPlayer, player.Position.X);
     }
 
     public void NotifyWebHit()
@@ -208,31 +214,46 @@ public class Bandit
         return new Rectangle(x, y, collisionWidth, collisionHeight);
     }
 
-    private void UpdateMovement(float delta, float distanceToPlayer)
+    private void UpdateMovement(float delta, float distanceToPlayer, float playerX)
     {
         var isAlert = distanceToPlayer <= DetectionRange;
         var leftLimit = _spawnPoint.X - PatrolRange;
         var rightLimit = _spawnPoint.X + PatrolRange;
 
-        if (isAlert)
-        {
-            _patrolDirection = _facingRight ? 1f : -1f;
-        }
-        else if (_position.X <= leftLimit)
+        if (!isAlert && _position.X <= leftLimit)
         {
             _patrolDirection = 1f;
             _facingRight = true;
         }
-        else if (_position.X >= rightLimit)
+        else if (!isAlert && _position.X >= rightLimit)
         {
             _patrolDirection = -1f;
             _facingRight = false;
         }
 
-        _position.X += _patrolDirection * MoveSpeed * delta;
-        _position.X = MathHelper.Clamp(_position.X, Math.Max(_worldBounds.Left, leftLimit), Math.Min(_worldBounds.Right, rightLimit));
+        if (isAlert)
+        {
+            var desiredX = MathHelper.Clamp(playerX + _engageOffsetX, _worldBounds.Left, _worldBounds.Right);
+            var distanceX = desiredX - _position.X;
+            if (MathF.Abs(distanceX) > EngageStopDistance)
+            {
+                _patrolDirection = MathF.Sign(distanceX);
+                _facingRight = _patrolDirection >= 0f;
+                _position.X += _patrolDirection * MoveSpeed * delta;
+            }
+
+            _position.X = MathHelper.Clamp(_position.X, _worldBounds.Left, _worldBounds.Right);
+        }
+        else
+        {
+            _position.X += _patrolDirection * MoveSpeed * delta;
+            _position.X = MathHelper.Clamp(
+                _position.X,
+                Math.Max(_worldBounds.Left, leftLimit),
+                Math.Min(_worldBounds.Right, rightLimit));
+            _facingRight = _patrolDirection >= 0f;
+        }
         _position.Y = _pathY;
-        _facingRight = _patrolDirection >= 0f;
 
         if (_moveFrames.Count == 0)
         {

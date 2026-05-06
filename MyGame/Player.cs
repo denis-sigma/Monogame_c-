@@ -48,7 +48,7 @@ public class Player
     private const float WebProjectileSpeed = 420f;
     private const float WebProjectileLife = 2.3f;
     private const float WebImpactDuration = 0.12f;
-    private const float WebWorldBoundsPadding = 96f;
+    private const float WebWorldBoundsPadding = 0f;
     private const int WebDamage = 1;
     private const string SpriteSourcePath = @"c:\Users\user\Desktop\спрайты\run.png";
     private const string FightSpriteSourcePath = @"c:\Users\user\Desktop\спрайты\fight.png";
@@ -104,7 +104,7 @@ public class Player
     private const float AttackStaminaDrainPerSecond = 35f;
     private const float StaminaRecoveryPerSecond = 20f;
     private const float ExhaustedRecoveryThreshold = 28f;
-    private const float WorldRightMovePadding = 360f;
+    private const float WorldRightMovePadding = 420f;
     private const string WebbedSpriteSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomWebFrames\sprite_6.png";
 
     public Vector2 Position => _position;
