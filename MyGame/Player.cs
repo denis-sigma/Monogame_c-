@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Audio;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using System.IO;
+using System.IO.Compression;
 
 namespace MyGame;
 
@@ -18,6 +21,7 @@ public class Player
         public float Rotation;
         public bool IsImpact;
         public float ImpactTime;
+        public bool WasShotWhileJumping;
     }
 
     private Texture2D? _runSpriteSheet;
@@ -31,6 +35,8 @@ public class Player
     private readonly List<Texture2D> _walkTextures = new List<Texture2D>();
     private readonly List<Texture2D> _fightTextures = new List<Texture2D>();
     private readonly List<Texture2D> _sprintTextures = new List<Texture2D>();
+    private readonly List<Texture2D> _webSwingTextures = new List<Texture2D>();
+    private readonly List<Texture2D> _deathTextures = new List<Texture2D>();
     private Vector2 _position;
     private Vector2 _velocity;
 
@@ -45,10 +51,12 @@ public class Player
     private const float SprintAnimationFrameTime = 0.055f;
     private const float AttackFrameTime = 0.06f;
     private const float WebShootFrameTime = 0.07f;
+    private const float WebSwingFrameTime = 0.22f;
+    private const float DeathFrameTime = 0.13f;
     private const float WebProjectileSpeed = 420f;
     private const float WebProjectileLife = 2.3f;
     private const float WebImpactDuration = 0.12f;
-    private const float WebWorldBoundsPadding = 0f;
+    private const float WebWorldBoundsPadding = 900f;
     private const int WebDamage = 1;
     private const string SpriteSourcePath = @"c:\Users\user\Desktop\спрайты\run.png";
     private const string FightSpriteSourcePath = @"c:\Users\user\Desktop\спрайты\fight.png";
@@ -69,11 +77,21 @@ public class Player
     private float _fightAnimationTimer = 0f;
     private int _currentWebShootFrameIndex = 0;
     private float _webShootAnimationTimer = 0f;
+    private int _currentWebSwingFrameIndex = 0;
+    private float _webSwingAnimationTimer = 0f;
+    private float _webSwingArcTimer = 0f;
+    private float _webSwingArcDirection = 1f;
+    private Vector2 _webSwingArcStart;
+    private int _currentDeathFrameIndex = 0;
+    private float _deathAnimationTimer = 0f;
     private bool _isMoving = false;
     private bool _isAttacking = false;
     private bool _isWebShooting = false;
     private bool _isSprinting = false;
     private bool _isCrouching = false;
+    private bool _isWebSwinging = false;
+    private bool _isDying = false;
+    private bool _isDeathAnimationFinished = false;
     private Vector2 _direction = new Vector2(1, 0);
     private KeyboardState _previousKeyboardState;
     private List<Rectangle> _webGunFrames = new List<Rectangle>();
@@ -85,6 +103,7 @@ public class Player
     private bool _hasHorizontalPathY;
     private float _horizontalPathY;
     private float _verticalVelocity;
+    private float _knockbackVelocityX;
     private bool _isJumping;
     private float _hitFlashTimer;
     private float _stamina;
@@ -94,18 +113,40 @@ public class Player
     private float _webReloadTimer;
     private bool _meleeDamageAppliedThisAttack;
     private int _pendingHitsFromBandits;
+    private SoundEffect? _webShotSound;
+    private ExternalMp3Player? _webShotMp3Player;
+    private SoundEffect? _punchSound;
+    private ExternalMp3Player? _punchMp3Player;
+    private ExternalMp3Player? _bulletHitMp3Player;
+    private ExternalMp3Player? _webEnemyHitMp3Player;
+    private bool _isWebShotSoundOpen;
     private const float HitFlashDuration = 0.18f;
     private const float JumpVelocity = -560f;
     private const float Gravity = 1800f;
+    private const float KnockbackFriction = 1100f;
     private const int MaxWebShots = 3;
     private const float WebReloadDuration = 4f;
     private const float MaxStamina = 100f;
     private const float SprintStaminaDrainPerSecond = 28f;
     private const float AttackStaminaDrainPerSecond = 35f;
+    private const float WebSwingStaminaDrainPerSecond = 45f;
     private const float StaminaRecoveryPerSecond = 20f;
     private const float ExhaustedRecoveryThreshold = 28f;
     private const float WorldRightMovePadding = 420f;
+    private const float WebSwingArcDuration = 1.05f;
+    private const float WebSwingArcDistance = 390f;
+    private const float WebSwingArcHeight = 310f;
     private const string WebbedSpriteSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomWebFrames\sprite_6.png";
+    private const string WebSwingSpriteZipSourcePath = @"c:\Users\user\Downloads\sprites_collection (33).zip";
+    private const string DeathSpriteZipSourcePath = @"c:\Users\user\Downloads\sprites_collection (41).zip";
+    private const string WebShotSoundPath = @"c:\Users\user\Downloads\zvuk-pautini-spidermena-2.mp3";
+    private const string WebShotSoundAlias = "SpiderWebShotSound";
+    private const string PunchSoundPath = @"c:\Users\user\Downloads\face-punch.mp3";
+    private const string BulletHitSoundPath = @"c:\Users\user\Downloads\pulya-probivaet-jest.mp3";
+    private const string WebEnemyHitSoundPath = @"c:\Users\user\Downloads\zvuk-pautini-spidermena-5.mp3";
+
+    [DllImport("winmm.dll", EntryPoint = "mciSendStringW", CharSet = CharSet.Unicode)]
+    private static extern int MciSendString(string command, IntPtr returnValue, int returnLength, IntPtr winHandle);
 
     public Vector2 Position => _position;
     public float VisualHeight => GetStandingFrameSize().Y * PlayerScale;
@@ -114,6 +155,7 @@ public class Player
     public bool IsSprinting => _isSprinting;
     public bool IsCrouching => _isCrouching;
     public bool IsWebbed => _webbedTimer > 0f;
+    public bool IsDeathAnimationFinished => _isDeathAnimationFinished;
     public float Stamina01 => MaxStamina <= 0f ? 0f : MathHelper.Clamp(_stamina / MaxStamina, 0f, 1f);
     public float WebMeter01
     {
@@ -143,6 +185,10 @@ public class Player
     public void LoadContent(GraphicsDevice graphicsDevice)
     {
         Unload();
+        LoadWebShotSound();
+        LoadPunchSound();
+        LoadBulletHitSound();
+        LoadWebEnemyHitSound();
 
         var outputRunPath = Path.Combine(AppContext.BaseDirectory, "Content", "run.png");
         var outputFightPath = Path.Combine(AppContext.BaseDirectory, "Content", "fight.png");
@@ -388,6 +434,8 @@ public class Player
         }
 
         LoadSprintTextures(graphicsDevice);
+        LoadWebSwingTextures(graphicsDevice);
+        LoadDeathTextures(graphicsDevice);
     }
 
     public void SetWorldBounds(Rectangle worldBounds)
@@ -403,6 +451,65 @@ public class Player
         if (!_isJumping)
         {
             _position.Y = y;
+        }
+    }
+
+    public void BeginDeathAnimation()
+    {
+        if (_isDying || _isDeathAnimationFinished)
+        {
+            return;
+        }
+
+        _isDying = true;
+        _isDeathAnimationFinished = _deathTextures.Count == 0;
+        _currentDeathFrameIndex = 0;
+        _deathAnimationTimer = 0f;
+        _velocity = Vector2.Zero;
+        _verticalVelocity = 0f;
+        _knockbackVelocityX = 0f;
+        _isMoving = false;
+        _isAttacking = false;
+        _isWebShooting = false;
+        _isSprinting = false;
+        _isCrouching = false;
+        _isWebSwinging = false;
+        _isJumping = false;
+        _webbedTimer = 0f;
+        if (_hasHorizontalPathY)
+        {
+            _position.Y = _horizontalPathY;
+        }
+    }
+
+    public void UpdateDeathAnimation(GameTime gameTime)
+    {
+        if (!_isDying || _isDeathAnimationFinished)
+        {
+            return;
+        }
+
+        if (_deathTextures.Count == 0)
+        {
+            _isDeathAnimationFinished = true;
+            return;
+        }
+
+        var delta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        _deathAnimationTimer += delta;
+        while (_deathAnimationTimer >= DeathFrameTime)
+        {
+            _deathAnimationTimer -= DeathFrameTime;
+            if (_currentDeathFrameIndex < _deathTextures.Count - 1)
+            {
+                _currentDeathFrameIndex++;
+            }
+            else
+            {
+                _isDeathAnimationFinished = true;
+                _currentDeathFrameIndex = _deathTextures.Count - 1;
+                return;
+            }
         }
     }
 
@@ -448,6 +555,22 @@ public class Player
     {
         _hitFlashTimer = HitFlashDuration;
         _pendingHitsFromBandits++;
+    }
+
+    public void NotifyBulletHit()
+    {
+        NotifyHit();
+        PlayBulletHitSound();
+    }
+
+    public void ApplyKnockback(float horizontalVelocity, float verticalVelocity)
+    {
+        _knockbackVelocityX = horizontalVelocity;
+        if (_hasHorizontalPathY && verticalVelocity < 0f)
+        {
+            _isJumping = true;
+            _verticalVelocity = Math.Min(_verticalVelocity, verticalVelocity);
+        }
     }
 
     public void ApplyWebbed(float duration)
@@ -674,9 +797,16 @@ public class Player
         stack.Push((x, y));
     }
 
-    public void Update(GameTime gameTime, KeyboardState keyboardState)
+    public void Update(GameTime gameTime, KeyboardState keyboardState, Vector2? webAimWorldPosition = null)
     {
         var delta = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        if (_isDying)
+        {
+            UpdateDeathAnimation(gameTime);
+            _previousKeyboardState = keyboardState;
+            return;
+        }
+
         UpdateResources(delta);
         var attackPressed = keyboardState.IsKeyDown(Keys.Q) && !_previousKeyboardState.IsKeyDown(Keys.Q);
         var webShootPressed = keyboardState.IsKeyDown(Keys.E) && !_previousKeyboardState.IsKeyDown(Keys.E);
@@ -693,11 +823,13 @@ public class Player
         {
             _webbedTimer = Math.Max(0f, _webbedTimer - delta);
             _velocity = Vector2.Zero;
+            _knockbackVelocityX = 0f;
             _isMoving = false;
             _isSprinting = false;
             _isCrouching = false;
             _isAttacking = false;
             _isWebShooting = false;
+            _isWebSwinging = false;
             if (_hasHorizontalPathY && !_isJumping)
             {
                 _position.Y = _horizontalPathY;
@@ -714,6 +846,7 @@ public class Player
             _meleeDamageAppliedThisAttack = false;
             _currentFightFrameIndex = 0;
             _fightAnimationTimer = 0f;
+            PlayPunchSound();
         }
 
         if (!_isAttacking &&
@@ -726,7 +859,7 @@ public class Player
             _isWebShooting = true;
             _currentWebShootFrameIndex = 0;
             _webShootAnimationTimer = 0f;
-            SpawnWebProjectile();
+            SpawnWebProjectile(webAimWorldPosition);
             _webShotsRemaining = Math.Max(0, _webShotsRemaining - 1);
             if (_webShotsRemaining == 0)
             {
@@ -737,6 +870,7 @@ public class Player
         if (_isAttacking)
         {
             _isCrouching = false;
+            _isWebSwinging = false;
             _velocity = Vector2.Zero;
             _isMoving = false;
 
@@ -760,6 +894,7 @@ public class Player
         if (_isWebShooting)
         {
             _isCrouching = false;
+            _isWebSwinging = false;
             _velocity = Vector2.Zero;
             _isMoving = false;
 
@@ -782,6 +917,28 @@ public class Player
         _velocity = Vector2.Zero;
         _isMoving = false;
         _isSprinting = false;
+        var webSwingPressed = keyboardState.IsKeyDown(Keys.R) && !_previousKeyboardState.IsKeyDown(Keys.R);
+        if ((webSwingPressed || _isWebSwinging) && _webSwingTextures.Count > 0 && _hasHorizontalPathY)
+        {
+            if (webSwingPressed && !_isWebSwinging)
+            {
+                if (_stamina > 0f && !_isExhausted)
+                {
+                    BeginWebSwing(keyboardState);
+                }
+                else
+                {
+                    _previousKeyboardState = keyboardState;
+                    return;
+                }
+            }
+
+            UpdateWebSwing(delta, keyboardState);
+            _previousKeyboardState = keyboardState;
+            return;
+        }
+
+        _isWebSwinging = false;
         var crouchHeld = keyboardState.IsKeyDown(Keys.LeftControl) || keyboardState.IsKeyDown(Keys.RightControl);
         _isCrouching = crouchHeld && !_isJumping;
 
@@ -817,6 +974,11 @@ public class Player
         }
 
         _position += _velocity * delta;
+        if (MathF.Abs(_knockbackVelocityX) > 1f)
+        {
+            _position.X += _knockbackVelocityX * delta;
+            _knockbackVelocityX = Approach(_knockbackVelocityX, 0f, KnockbackFriction * delta);
+        }
 
         if (jumpPressed && !_isJumping && _hasHorizontalPathY && !_isCrouching)
         {
@@ -867,6 +1029,74 @@ public class Player
         _previousKeyboardState = keyboardState;
     }
 
+    private void BeginWebSwing(KeyboardState keyboardState)
+    {
+        _isWebSwinging = true;
+        _webSwingArcTimer = 0f;
+        _webSwingAnimationTimer = 0f;
+        _currentWebSwingFrameIndex = 0;
+
+        if (keyboardState.IsKeyDown(Keys.A))
+        {
+            _direction = new Vector2(-1f, 0f);
+        }
+        else if (keyboardState.IsKeyDown(Keys.D))
+        {
+            _direction = new Vector2(1f, 0f);
+        }
+
+        _webSwingArcDirection = _direction.X < 0f ? -1f : 1f;
+        _webSwingArcStart = new Vector2(_position.X, _horizontalPathY);
+        PlayWebShotSound();
+    }
+
+    private void UpdateWebSwing(float delta, KeyboardState keyboardState)
+    {
+        if (_stamina <= 0f && _isExhausted)
+        {
+            _isWebSwinging = false;
+            _webSwingArcTimer = 0f;
+            if (_hasHorizontalPathY)
+            {
+                _position.Y = _horizontalPathY;
+            }
+
+            return;
+        }
+
+        _isCrouching = false;
+        _isJumping = false;
+        _isSprinting = false;
+        _isMoving = true;
+        _verticalVelocity = 0f;
+
+        _webSwingArcTimer += delta;
+        var progress = MathHelper.Clamp(_webSwingArcTimer / WebSwingArcDuration, 0f, 1f);
+        var arcX = _webSwingArcStart.X + _webSwingArcDirection * WebSwingArcDistance * progress;
+        var arcY = _horizontalPathY - WebSwingArcHeight * 4f * progress * (1f - progress);
+        _position = new Vector2(arcX, arcY);
+
+        if (progress >= 1f)
+        {
+            _isWebSwinging = false;
+            _webSwingArcTimer = 0f;
+            _position.Y = _horizontalPathY;
+        }
+
+        if (_hasWorldBounds)
+        {
+            _position.X = MathHelper.Clamp(_position.X, _worldBounds.Left, _worldBounds.Right + WorldRightMovePadding);
+            _position.Y = MathHelper.Clamp(_position.Y, _worldBounds.Top, _worldBounds.Bottom);
+        }
+
+        _webSwingAnimationTimer += delta;
+        while (_webSwingAnimationTimer >= WebSwingFrameTime)
+        {
+            _webSwingAnimationTimer -= WebSwingFrameTime;
+            _currentWebSwingFrameIndex = (_currentWebSwingFrameIndex + 1) % _webSwingTextures.Count;
+        }
+    }
+
     private void UpdateResources(float delta)
     {
         if (_webReloadTimer > 0f)
@@ -882,6 +1112,10 @@ public class Player
         if (_isAttacking)
         {
             staminaDelta -= AttackStaminaDrainPerSecond * delta;
+        }
+        else if (_isWebSwinging)
+        {
+            staminaDelta -= WebSwingStaminaDrainPerSecond * delta;
         }
         else if (_isSprinting && _isMoving)
         {
@@ -939,6 +1173,44 @@ public class Player
         }
     }
 
+    public bool HasIncomingWebProjectile(Rectangle targetBounds)
+    {
+        if (targetBounds.Width <= 0 || targetBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        var sensorBounds = targetBounds;
+        sensorBounds.Inflate(430, 110);
+        var targetCenter = new Vector2(targetBounds.Center.X, targetBounds.Center.Y);
+
+        foreach (var projectile in _webProjectiles)
+        {
+            if (projectile.IsImpact || projectile.Velocity == Vector2.Zero)
+            {
+                continue;
+            }
+
+            var projectileBounds = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 18f),
+                (int)MathF.Round(projectile.Position.Y - 18f),
+                36,
+                36);
+            if (!projectileBounds.Intersects(sensorBounds))
+            {
+                continue;
+            }
+
+            var toTarget = targetCenter - projectile.Position;
+            if (Vector2.Dot(projectile.Velocity, toTarget) > 0f)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public bool TryHitBandit(Bandit bandit)
     {
         if (!bandit.IsAlive)
@@ -976,7 +1248,16 @@ public class Player
             projectile.Velocity = Vector2.Zero;
             projectile.ImpactTime = WebImpactDuration;
             _webProjectiles[i] = projectile;
-            bandit.ApplyDamage(WebDamage);
+            PlayWebEnemyHitSound();
+            if (bandit.CanTakeWebDamage)
+            {
+                bandit.ApplyDamage(WebDamage);
+            }
+            else
+            {
+                bandit.ApplyWebImpact();
+            }
+
             hit = true;
         }
 
@@ -1021,11 +1302,108 @@ public class Player
             projectile.Velocity = Vector2.Zero;
             projectile.ImpactTime = WebImpactDuration;
             _webProjectiles[i] = projectile;
+            PlayWebEnemyHitSound();
             venom.ApplyDamage(WebDamage);
             hit = true;
         }
 
         hit |= TryDealMeleeDamage(venom, venomBounds);
+        return hit;
+    }
+
+    public bool TryHitFlyingGoblin(FlyingGoblin goblin)
+    {
+        if (!goblin.IsAlive)
+        {
+            return false;
+        }
+
+        var goblinBounds = goblin.GetCollisionBounds();
+        if (goblinBounds.Width <= 0 || goblinBounds.Height <= 0)
+        {
+            return false;
+        }
+        goblinBounds.Inflate(6, 6);
+
+        var hit = false;
+        for (var i = 0; i < _webProjectiles.Count; i++)
+        {
+            var projectile = _webProjectiles[i];
+            if (projectile.IsImpact)
+            {
+                continue;
+            }
+
+            var projectileHitBox = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 22f),
+                (int)MathF.Round(projectile.Position.Y - 22f),
+                44,
+                44
+            );
+            if (!projectileHitBox.Intersects(goblinBounds))
+            {
+                continue;
+            }
+
+            projectile.IsImpact = true;
+            projectile.Velocity = Vector2.Zero;
+            projectile.ImpactTime = WebImpactDuration;
+            _webProjectiles[i] = projectile;
+            PlayWebEnemyHitSound();
+            goblin.ApplyDamage(WebDamage);
+            hit = true;
+        }
+
+        return hit;
+    }
+
+    public bool TryHitDoctorOctopus(DoctorOctopus doctorOctopus)
+    {
+        if (!doctorOctopus.IsAlive)
+        {
+            return false;
+        }
+
+        var hit = false;
+        var doctorBounds = doctorOctopus.GetCollisionBounds();
+        if (doctorBounds.Width <= 0 || doctorBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < _webProjectiles.Count; i++)
+        {
+            var projectile = _webProjectiles[i];
+            if (projectile.IsImpact)
+            {
+                continue;
+            }
+
+            var projectileHitBox = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 12f),
+                (int)MathF.Round(projectile.Position.Y - 12f),
+                24,
+                24
+            );
+            if (!projectileHitBox.Intersects(doctorBounds))
+            {
+                continue;
+            }
+
+            projectile.IsImpact = true;
+            projectile.Velocity = Vector2.Zero;
+            projectile.ImpactTime = WebImpactDuration;
+            _webProjectiles[i] = projectile;
+            PlayWebEnemyHitSound();
+            if (!doctorOctopus.IsInvulnerable)
+            {
+                doctorOctopus.ApplyDamage(WebDamage);
+            }
+
+            hit = true;
+        }
+
+        hit |= TryDealMeleeDamage(doctorOctopus, doctorBounds);
         return hit;
     }
 
@@ -1097,6 +1475,123 @@ public class Player
         return true;
     }
 
+    private bool TryDealMeleeDamage(DoctorOctopus doctorOctopus, Rectangle doctorBounds)
+    {
+        if (!_isAttacking || _meleeDamageAppliedThisAttack)
+        {
+            return false;
+        }
+
+        var fightFrameCount = _fightTextures.Count > 0 ? _fightTextures.Count : _fightFrames.Count;
+        var activeFrame = Math.Max(0, Math.Min(_currentFightFrameIndex, Math.Max(0, fightFrameCount - 1)));
+        var hitWindowStart = Math.Max(1, fightFrameCount / 3);
+        var hitWindowEnd = Math.Max(hitWindowStart, (fightFrameCount * 2) / 3);
+        if (activeFrame < hitWindowStart || activeFrame > hitWindowEnd)
+        {
+            return false;
+        }
+
+        var playerBounds = GetCollisionBounds();
+        var meleeWidth = Math.Max(26, playerBounds.Width / 2);
+        var meleeHeight = Math.Max(24, playerBounds.Height - 8);
+        var meleeX = _direction.X < 0f
+            ? playerBounds.Left - meleeWidth
+            : playerBounds.Right;
+        var meleeY = playerBounds.Y + 4;
+        var meleeBounds = new Rectangle(meleeX, meleeY, meleeWidth, meleeHeight);
+        if (!meleeBounds.Intersects(doctorBounds))
+        {
+            return false;
+        }
+
+        _meleeDamageAppliedThisAttack = true;
+        if (!doctorOctopus.IsInvulnerable)
+        {
+            doctorOctopus.ApplyDamage(1);
+        }
+
+        return true;
+    }
+
+    public bool TryHitLizard(Lizard lizard)
+    {
+        if (!lizard.IsAlive)
+        {
+            return false;
+        }
+
+        var hit = false;
+        var lizardBounds = lizard.GetCollisionBounds();
+        if (lizardBounds.Width <= 0 || lizardBounds.Height <= 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < _webProjectiles.Count; i++)
+        {
+            var projectile = _webProjectiles[i];
+            if (projectile.IsImpact)
+            {
+                continue;
+            }
+
+            var projectileHitBox = new Rectangle(
+                (int)MathF.Round(projectile.Position.X - 12f),
+                (int)MathF.Round(projectile.Position.Y - 12f),
+                24,
+                24);
+            if (!projectileHitBox.Intersects(lizardBounds))
+            {
+                continue;
+            }
+
+            projectile.IsImpact = true;
+            projectile.Velocity = Vector2.Zero;
+            projectile.ImpactTime = WebImpactDuration;
+            _webProjectiles[i] = projectile;
+            PlayWebEnemyHitSound();
+            lizard.ApplyDamage(WebDamage);
+            hit = true;
+        }
+
+        hit |= TryDealMeleeDamage(lizard, lizardBounds);
+        return hit;
+    }
+
+    private bool TryDealMeleeDamage(Lizard lizard, Rectangle lizardBounds)
+    {
+        if (!_isAttacking || _meleeDamageAppliedThisAttack)
+        {
+            return false;
+        }
+
+        var fightFrameCount = _fightTextures.Count > 0 ? _fightTextures.Count : _fightFrames.Count;
+        var activeFrame = Math.Max(0, Math.Min(_currentFightFrameIndex, Math.Max(0, fightFrameCount - 1)));
+        var hitWindowStart = Math.Max(1, fightFrameCount / 3);
+        var hitWindowEnd = Math.Max(hitWindowStart, (fightFrameCount * 2) / 3);
+        if (activeFrame < hitWindowStart || activeFrame > hitWindowEnd)
+        {
+            return false;
+        }
+
+        var playerBounds = GetCollisionBounds();
+        var meleeWidth = Math.Max(26, playerBounds.Width / 2);
+        var meleeHeight = Math.Max(24, playerBounds.Height - 8);
+        var meleeX = _direction.X < 0f
+            ? playerBounds.Left - meleeWidth
+            : playerBounds.Right;
+        var meleeY = playerBounds.Y + 4;
+        var meleeBounds = new Rectangle(meleeX, meleeY, meleeWidth, meleeHeight);
+        if (!meleeBounds.Intersects(lizardBounds))
+        {
+            return false;
+        }
+
+        _meleeDamageAppliedThisAttack = true;
+        lizard.ApplyDamage(1);
+        return true;
+    }
+
     public int ConsumePendingHits()
     {
         var result = _pendingHitsFromBandits;
@@ -1104,16 +1599,39 @@ public class Player
         return result;
     }
 
-    private void SpawnWebProjectile()
+    private static float Approach(float value, float target, float maxDelta)
     {
-        var dir = _direction;
+        if (value < target)
+        {
+            return Math.Min(value + maxDelta, target);
+        }
+
+        return Math.Max(value - maxDelta, target);
+    }
+
+    private void SpawnWebProjectile(Vector2? aimWorldPosition = null)
+    {
+        var dir = aimWorldPosition.HasValue
+            ? aimWorldPosition.Value - _position
+            : _direction;
         if (dir == Vector2.Zero)
         {
             dir = new Vector2(1, 0);
         }
 
         dir.Normalize();
+        _direction = new Vector2(dir.X >= 0f ? 1f : -1f, 0f);
         var spawnPos = _position + GetMuzzleOffsetByDirection(dir) * PlayerScale;
+        if (aimWorldPosition.HasValue)
+        {
+            dir = aimWorldPosition.Value - spawnPos;
+            if (dir == Vector2.Zero)
+            {
+                dir = _direction;
+            }
+
+            dir.Normalize();
+        }
 
         _webProjectiles.Add(new WebProjectile
         {
@@ -1122,8 +1640,185 @@ public class Player
             Life = WebProjectileLife,
             Rotation = MathF.Atan2(dir.Y, dir.X),
             IsImpact = false,
-            ImpactTime = 0f
+            ImpactTime = 0f,
+            WasShotWhileJumping = _isJumping
         });
+
+        PlayWebShotSound();
+    }
+
+    private void LoadWebShotSound()
+    {
+        _webShotSound?.Dispose();
+        _webShotSound = null;
+        _webShotMp3Player?.Dispose();
+        _webShotMp3Player = null;
+        _isWebShotSoundOpen = false;
+
+        if (!File.Exists(WebShotSoundPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(WebShotSoundPath);
+            _webShotSound = SoundEffect.FromStream(stream);
+            return;
+        }
+        catch
+        {
+            _webShotSound = null;
+        }
+
+        _webShotMp3Player = new ExternalMp3Player();
+        if (_webShotMp3Player.Load(WebShotSoundPath, 90, repeat: false))
+        {
+            return;
+        }
+
+        _webShotMp3Player.Dispose();
+        _webShotMp3Player = null;
+
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        CloseWebShotSound();
+        _isWebShotSoundOpen = MciSendString(
+            $"open \"{WebShotSoundPath}\" type mpegvideo alias {WebShotSoundAlias}",
+            IntPtr.Zero,
+            0,
+            IntPtr.Zero) == 0;
+    }
+
+    private void PlayWebShotSound()
+    {
+        if (_webShotSound != null)
+        {
+            _webShotSound.Play(0.85f, 0f, 0f);
+            return;
+        }
+
+        if (_webShotMp3Player != null)
+        {
+            _webShotMp3Player.PlayFromStart();
+            return;
+        }
+
+        if (!_isWebShotSoundOpen)
+        {
+            return;
+        }
+
+        MciSendString($"seek {WebShotSoundAlias} to start", IntPtr.Zero, 0, IntPtr.Zero);
+        MciSendString($"play {WebShotSoundAlias}", IntPtr.Zero, 0, IntPtr.Zero);
+    }
+
+    private void LoadWebEnemyHitSound()
+    {
+        _webEnemyHitMp3Player?.Dispose();
+        _webEnemyHitMp3Player = null;
+
+        if (!File.Exists(WebEnemyHitSoundPath))
+        {
+            return;
+        }
+
+        var player = new ExternalMp3Player();
+        if (player.Load(WebEnemyHitSoundPath, 88, repeat: false))
+        {
+            _webEnemyHitMp3Player = player;
+            return;
+        }
+
+        player.Dispose();
+    }
+
+    private void PlayWebEnemyHitSound()
+    {
+        _webEnemyHitMp3Player?.PlayFromStart();
+    }
+
+    private void LoadPunchSound()
+    {
+        _punchSound?.Dispose();
+        _punchSound = null;
+        _punchMp3Player?.Dispose();
+        _punchMp3Player = null;
+
+        if (!File.Exists(PunchSoundPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(PunchSoundPath);
+            _punchSound = SoundEffect.FromStream(stream);
+            return;
+        }
+        catch
+        {
+            _punchSound = null;
+        }
+
+        _punchMp3Player = new ExternalMp3Player();
+        if (_punchMp3Player.Load(PunchSoundPath, 90, repeat: false))
+        {
+            return;
+        }
+
+        _punchMp3Player.Dispose();
+        _punchMp3Player = null;
+    }
+
+    private void PlayPunchSound()
+    {
+        if (_punchSound != null)
+        {
+            _punchSound.Play(0.9f, 0f, 0f);
+            return;
+        }
+
+        _punchMp3Player?.PlayFromStart();
+    }
+
+    private void LoadBulletHitSound()
+    {
+        _bulletHitMp3Player?.Dispose();
+        _bulletHitMp3Player = null;
+        if (!File.Exists(BulletHitSoundPath))
+        {
+            return;
+        }
+
+        _bulletHitMp3Player = new ExternalMp3Player();
+        if (_bulletHitMp3Player.Load(BulletHitSoundPath, 88, repeat: false))
+        {
+            return;
+        }
+
+        _bulletHitMp3Player.Dispose();
+        _bulletHitMp3Player = null;
+    }
+
+    private void PlayBulletHitSound()
+    {
+        _bulletHitMp3Player?.PlayFromStart();
+    }
+
+    private void CloseWebShotSound()
+    {
+        if (!_isWebShotSoundOpen)
+        {
+            return;
+        }
+
+        MciSendString($"stop {WebShotSoundAlias}", IntPtr.Zero, 0, IntPtr.Zero);
+        MciSendString($"close {WebShotSoundAlias}", IntPtr.Zero, 0, IntPtr.Zero);
+        _isWebShotSoundOpen = false;
     }
 
     private static Vector2 GetMuzzleOffsetByDirection(Vector2 dir)
@@ -1218,6 +1913,19 @@ public class Player
 
     public void Unload()
     {
+        CloseWebShotSound();
+        _webShotSound?.Dispose();
+        _webShotSound = null;
+        _webShotMp3Player?.Dispose();
+        _webShotMp3Player = null;
+        _punchSound?.Dispose();
+        _punchSound = null;
+        _punchMp3Player?.Dispose();
+        _punchMp3Player = null;
+        _bulletHitMp3Player?.Dispose();
+        _bulletHitMp3Player = null;
+        _webEnemyHitMp3Player?.Dispose();
+        _webEnemyHitMp3Player = null;
         _runSpriteSheet?.Dispose();
         _runSpriteSheet = null;
         _fightSpriteSheet?.Dispose();
@@ -1252,6 +1960,18 @@ public class Player
         }
 
         _sprintTextures.Clear();
+        foreach (var webSwingTexture in _webSwingTextures)
+        {
+            webSwingTexture.Dispose();
+        }
+
+        _webSwingTextures.Clear();
+        foreach (var deathTexture in _deathTextures)
+        {
+            deathTexture.Dispose();
+        }
+
+        _deathTextures.Clear();
     }
 
     private void LoadWalkTextures(GraphicsDevice graphicsDevice)
@@ -1329,8 +2049,61 @@ public class Player
         }
     }
 
+    private void LoadWebSwingTextures(GraphicsDevice graphicsDevice)
+    {
+        if (!File.Exists(WebSwingSpriteZipSourcePath))
+        {
+            return;
+        }
+
+        using var archive = ZipFile.OpenRead(WebSwingSpriteZipSourcePath);
+        var entries = archive.Entries
+            .Where(entry => entry.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in entries)
+        {
+            using var stream = entry.Open();
+            var texture = Texture2D.FromStream(graphicsDevice, stream);
+            ApplyBlackKey(texture);
+            _webSwingTextures.Add(texture);
+        }
+    }
+
+    private void LoadDeathTextures(GraphicsDevice graphicsDevice)
+    {
+        if (!File.Exists(DeathSpriteZipSourcePath))
+        {
+            return;
+        }
+
+        using var archive = ZipFile.OpenRead(DeathSpriteZipSourcePath);
+        var entries = archive.Entries
+            .Where(entry => entry.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(entry =>
+            {
+                var name = Path.GetFileNameWithoutExtension(entry.FullName);
+                var digits = new string(name.Where(char.IsDigit).ToArray());
+                return int.TryParse(digits, out var number) ? number : int.MaxValue;
+            })
+            .ThenBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in entries)
+        {
+            using var stream = entry.Open();
+            var texture = Texture2D.FromStream(graphicsDevice, stream);
+            ApplyBlackKey(texture);
+            _deathTextures.Add(texture);
+        }
+    }
+
     private (Texture2D? Texture, Rectangle? SourceRect) GetCurrentFrame()
     {
+        if (_isDying && _deathTextures.Count > 0)
+        {
+            return (_deathTextures[Math.Clamp(_currentDeathFrameIndex, 0, _deathTextures.Count - 1)], null);
+        }
+
         if (_webbedTimer > 0f && _webbedTexture != null)
         {
             return (_webbedTexture, null);
@@ -1349,6 +2122,11 @@ public class Player
         if (_isJumping && _jumpTexture != null)
         {
             return (_jumpTexture, null);
+        }
+
+        if (_isWebSwinging && _webSwingTextures.Count > 0)
+        {
+            return (_webSwingTextures[Math.Clamp(_currentWebSwingFrameIndex, 0, _webSwingTextures.Count - 1)], null);
         }
 
         if (_isWebShooting && _webGunFrames.Count >= 2)

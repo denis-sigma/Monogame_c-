@@ -25,6 +25,10 @@ public class Venom
     private readonly List<Texture2D> _deathFrames = new();
     private readonly List<Texture2D> _webShotFrames = new();
     private readonly List<WebShot> _webShots = new();
+    private readonly List<ExternalMp3Player> _voiceLines = new();
+    private ExternalMp3Player? _webHitSoundPlayer;
+    private ExternalMp3Player? _meleeHitSoundPlayer;
+    private ExternalMp3Player? _deathSoundPlayer;
     private Texture2D? _idleFrame;
     private Texture2D? _shootFrame;
     private Vector2 _position;
@@ -37,6 +41,7 @@ public class Venom
     private float _meleeCooldown;
     private float _shootCooldown;
     private float _shootPoseTimer;
+    private float _voiceLineTimer;
     private int _currentRunFrame;
     private int _currentFightFrame;
     private int _currentJumpFrame;
@@ -80,12 +85,23 @@ public class Venom
     private const float WebbedDuration = 2.3f;
     private const float HitFlashDuration = 0.14f;
     private const float DeathFrameTime = 0.11f;
+    private const float VoiceLineMinDelay = 1.0f;
+    private const float VoiceLineMaxDelay = 2.4f;
     private const int MaxHealth = 12;
     private const string FramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomFrames";
     private const string FightFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomFightFrames";
     private const string JumpFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomJumpFrames";
     private const string WebFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomWebFrames";
     private const string DeathFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\VenomDeathFrames";
+    private const string WebHitSoundPath = @"c:\Users\user\Downloads\zvuk-pautini-spidermena.mp3";
+    private const string MeleeHitSoundPath = @"c:\Users\user\Downloads\sound-hitting-metal.mp3";
+    private const string DeathSoundPath = @"c:\Users\user\Downloads\zhal-konechno-etogo-dobriaka.mp3";
+    private static readonly string[] VoiceLinePaths =
+    {
+        @"c:\Users\user\Downloads\Voicy_You Are A Looser.mp3",
+        @"c:\Users\user\Downloads\Voicy_We Are Venom.mp3",
+        @"c:\Users\user\Downloads\Voicy_Outstanding.mp3"
+    };
 
     public bool IsLoaded => _idleFrame != null;
     public bool IsAlive => _health > 0;
@@ -137,6 +153,11 @@ public class Venom
         LoadFightFrames(graphicsDevice);
         LoadJumpFrames(graphicsDevice);
         LoadDeathFrames(graphicsDevice);
+        LoadVoiceLines();
+        LoadWebHitSound();
+        LoadMeleeHitSound();
+        LoadDeathSound();
+        ResetVoiceLineTimer();
     }
 
     public void SetWorld(Rectangle worldBounds, float pathY)
@@ -186,6 +207,7 @@ public class Venom
         var toPlayer = player.Position - _position;
         var distanceToPlayer = MathF.Abs(toPlayer.X);
         var velocityX = 0f;
+        UpdateVoiceLines(delta, distanceToPlayer);
 
         if (_isPounceAttacking)
         {
@@ -262,6 +284,7 @@ public class Venom
             _deathAnimationTimer = 0f;
             _currentDeathFrame = 0;
             _isDeathAnimationFinished = false;
+            PlayDeathSound();
         }
 
         return _health == 0;
@@ -360,6 +383,143 @@ public class Venom
 
         _webShotFrames.Clear();
         _webShots.Clear();
+        foreach (var voiceLine in _voiceLines)
+        {
+            voiceLine.Dispose();
+        }
+
+        _voiceLines.Clear();
+        _webHitSoundPlayer?.Dispose();
+        _webHitSoundPlayer = null;
+        _meleeHitSoundPlayer?.Dispose();
+        _meleeHitSoundPlayer = null;
+        _deathSoundPlayer?.Dispose();
+        _deathSoundPlayer = null;
+    }
+
+    private void LoadWebHitSound()
+    {
+        _webHitSoundPlayer?.Dispose();
+        _webHitSoundPlayer = null;
+
+        if (!File.Exists(WebHitSoundPath))
+        {
+            return;
+        }
+
+        var player = new ExternalMp3Player();
+        if (player.Load(WebHitSoundPath, 88, repeat: false))
+        {
+            _webHitSoundPlayer = player;
+            return;
+        }
+
+        player.Dispose();
+    }
+
+    private void PlayWebHitSound()
+    {
+        _webHitSoundPlayer?.PlayFromStart();
+    }
+
+    private void LoadMeleeHitSound()
+    {
+        _meleeHitSoundPlayer?.Dispose();
+        _meleeHitSoundPlayer = null;
+
+        if (!File.Exists(MeleeHitSoundPath))
+        {
+            return;
+        }
+
+        var player = new ExternalMp3Player();
+        if (player.Load(MeleeHitSoundPath, 90, repeat: false))
+        {
+            _meleeHitSoundPlayer = player;
+            return;
+        }
+
+        player.Dispose();
+    }
+
+    private void PlayMeleeHitSound()
+    {
+        _meleeHitSoundPlayer?.PlayFromStart();
+    }
+
+    private void LoadDeathSound()
+    {
+        _deathSoundPlayer?.Dispose();
+        _deathSoundPlayer = null;
+
+        if (!File.Exists(DeathSoundPath))
+        {
+            return;
+        }
+
+        var player = new ExternalMp3Player();
+        if (player.Load(DeathSoundPath, 92, repeat: false))
+        {
+            _deathSoundPlayer = player;
+            return;
+        }
+
+        player.Dispose();
+    }
+
+    private void PlayDeathSound()
+    {
+        _deathSoundPlayer?.PlayFromStart();
+    }
+
+    private void LoadVoiceLines()
+    {
+        foreach (var voiceLine in _voiceLines)
+        {
+            voiceLine.Dispose();
+        }
+
+        _voiceLines.Clear();
+        foreach (var path in VoiceLinePaths)
+        {
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            var player = new ExternalMp3Player();
+            if (player.Load(path, 86, repeat: false))
+            {
+                _voiceLines.Add(player);
+                continue;
+            }
+
+            player.Dispose();
+        }
+    }
+
+    private void UpdateVoiceLines(float delta, float distanceToPlayer)
+    {
+        if (_voiceLines.Count == 0 || distanceToPlayer > DetectionRange)
+        {
+            ResetVoiceLineTimer();
+            return;
+        }
+
+        _voiceLineTimer -= delta;
+        if (_voiceLineTimer > 0f)
+        {
+            return;
+        }
+
+        var index = Random.Shared.Next(_voiceLines.Count);
+        _voiceLines[index].PlayFromStart();
+        ResetVoiceLineTimer();
+    }
+
+    private void ResetVoiceLineTimer()
+    {
+        _voiceLineTimer = VoiceLineMinDelay + Random.Shared.NextSingle() * (VoiceLineMaxDelay - VoiceLineMinDelay);
     }
 
     private static void ApplyBlackKey(Texture2D texture)
@@ -586,6 +746,7 @@ public class Venom
                 player.NotifyHit();
             }
 
+            PlayMeleeHitSound();
             _meleeDamageApplied = true;
         }
 
@@ -679,6 +840,7 @@ public class Venom
                     player.NotifyHit();
                 }
 
+                PlayMeleeHitSound();
                 _pounceDamageApplied = true;
             }
 
@@ -782,6 +944,7 @@ public class Venom
             if (shotBounds.Intersects(playerBounds))
             {
                 player.ApplyWebbed(WebbedDuration);
+                PlayWebHitSound();
                 BeginPounceAttack(player);
                 _webShots.RemoveAt(i);
                 continue;

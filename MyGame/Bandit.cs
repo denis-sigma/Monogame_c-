@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Audio;
 using Microsoft.Xna.Framework.Graphics;
 
 namespace MyGame;
@@ -19,23 +21,35 @@ public class Bandit
 
     private readonly List<Texture2D> _moveFrames = new();
     private readonly List<Texture2D> _shootFrames = new();
+    private readonly List<Texture2D> _meleeFrames = new();
     private readonly List<Bullet> _bullets = new();
     private Texture2D? _shootTexture;
     private Texture2D? _bulletSpriteSheet;
+    private SoundEffect? _bigBanditPunchSound;
+    private ExternalMp3Player? _bigBanditPunchPlayer;
+    private ExternalMp3Player? _shootSoundPlayer;
+    private ExternalMp3Player? _deathSoundPlayer;
     private Rectangle _bulletRect;
     private Vector2 _position;
     private Vector2 _spawnPoint;
     private readonly float _engageOffsetX;
     private Rectangle _worldBounds;
+    private readonly string? _customMoveFramesZipPath;
+    private readonly string? _customMeleeFramesZipPath;
+    private readonly bool _canShoot;
+    private readonly bool _canTakeWebDamage;
     private float _pathY;
     private float _moveTimer;
     private float _shootTimer;
     private int _currentMoveFrame;
     private int _currentShootFrame;
+    private int _currentMeleeFrame;
     private int _remainingBurstShots;
     private float _bulletCooldown;
     private float _betweenBurstShotTimer;
     private bool _isShooting;
+    private bool _isMeleeAttacking;
+    private bool _meleeDamageApplied;
     private bool _facingRight = true;
     private float _patrolDirection = 1f;
     private float _webHitFlashTimer;
@@ -57,18 +71,34 @@ public class Bandit
     private const float BulletWorldBoundsPadding = 4000f;
     private const float MoveFrameTime = 0.12f;
     private const float ShootFrameTime = 0.09f;
+    private const float MeleeFrameTime = 0.11f;
+    private const float MeleeRange = 88f;
+    private const float MeleeCooldown = 1.15f;
     private const string MoveFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\BanditFrames";
     private const string ShootFramesFolderPath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\BanditShootBase";
     private const string ShootSpriteSourcePath = @"c:\Users\user\Desktop\Monogame\MyGame\Content\BanditShootBase\sprite_1.png";
     private const string BulletSpriteSourcePath = @"c:\Users\user\Downloads\снаряд.png";
+    private const string BigBanditPunchSoundPath = @"c:\Users\user\Downloads\mixkit-soft-quick-punch-2151.wav";
+    private const string ShootSoundPath = @"c:\Users\user\Downloads\sudden-excellent-well-aimed-shot-from-a-pistol.mp3";
+    private const string DeathSoundPath = @"c:\Users\user\Downloads\silent-fall-into-the-sand.mp3";
 
     public bool IsLoaded => _moveFrames.Count > 0;
     public bool IsAlive => _health > 0;
+    public bool CanTakeWebDamage => _canTakeWebDamage;
 
-    public Bandit(Vector2 startPosition)
+    public Bandit(
+        Vector2 startPosition,
+        string? customMoveFramesZipPath = null,
+        bool canShoot = true,
+        string? customMeleeFramesZipPath = null,
+        bool canTakeWebDamage = true)
     {
         _position = startPosition;
         _spawnPoint = startPosition;
+        _customMoveFramesZipPath = customMoveFramesZipPath;
+        _customMeleeFramesZipPath = customMeleeFramesZipPath;
+        _canShoot = canShoot;
+        _canTakeWebDamage = canTakeWebDamage;
         _pathY = startPosition.Y;
         // Deterministic per-bandit combat offset so they spread around player instead of stacking.
         var seed = startPosition.X * 0.037f + startPosition.Y * 0.013f;
@@ -80,22 +110,29 @@ public class Bandit
         Unload();
 
         LoadMoveFrames(graphicsDevice);
-        LoadShootFrames(graphicsDevice);
-        _shootTexture = LoadTexture(graphicsDevice, "bandit-shoot.png", ShootSpriteSourcePath);
-        if (_shootTexture != null)
+        LoadMeleeFrames(graphicsDevice);
+        LoadBigBanditPunchSound();
+        LoadShootSound();
+        LoadDeathSound();
+        if (_canShoot)
         {
-            ApplyBlackKey(_shootTexture);
-            if (_shootFrames.Count == 0)
+            LoadShootFrames(graphicsDevice);
+            _shootTexture = LoadTexture(graphicsDevice, "bandit-shoot.png", ShootSpriteSourcePath);
+            if (_shootTexture != null)
             {
-                _shootFrames.Add(_shootTexture);
+                ApplyBlackKey(_shootTexture);
+                if (_shootFrames.Count == 0)
+                {
+                    _shootFrames.Add(_shootTexture);
+                }
             }
-        }
 
-        _bulletSpriteSheet = LoadTexture(graphicsDevice, "bandit-bullet.png", BulletSpriteSourcePath);
-        if (_bulletSpriteSheet != null)
-        {
-            ApplyBlackKey(_bulletSpriteSheet);
-            _bulletRect = ExtractOpaqueBounds(_bulletSpriteSheet);
+            _bulletSpriteSheet = LoadTexture(graphicsDevice, "bandit-bullet.png", BulletSpriteSourcePath);
+            if (_bulletSpriteSheet != null)
+            {
+                ApplyBlackKey(_bulletSpriteSheet);
+                _bulletRect = ExtractOpaqueBounds(_bulletSpriteSheet);
+            }
         }
     }
 
@@ -139,6 +176,18 @@ public class Bandit
         }
         UpdateBullets(delta, player);
 
+        if (_isMeleeAttacking)
+        {
+            UpdateMeleeAttack(delta, player);
+            return;
+        }
+
+        if (!_canShoot && _meleeFrames.Count > 0 && distanceToPlayer <= MeleeRange && _bulletCooldown <= 0f)
+        {
+            BeginMeleeAttack();
+            return;
+        }
+
         if (_isShooting)
         {
             _shootTimer += delta;
@@ -169,7 +218,7 @@ public class Bandit
             return;
         }
 
-        var shouldShoot = distanceToPlayer <= ShootRange && MathF.Abs(toPlayer.X) > 12f && _bulletCooldown <= 0f;
+        var shouldShoot = _canShoot && distanceToPlayer <= ShootRange && MathF.Abs(toPlayer.X) > 12f && _bulletCooldown <= 0f;
         if (shouldShoot && _remainingBurstShots <= 0 && (_shootFrames.Count > 0 || _shootTexture != null))
         {
             _remainingBurstShots = BurstShotCount;
@@ -180,9 +229,54 @@ public class Bandit
         UpdateMovement(delta, distanceToPlayer, player.Position.X);
     }
 
+    private void UpdateMeleeAttack(float delta, Player player)
+    {
+        _shootTimer += delta;
+        if (!_meleeDamageApplied && _currentMeleeFrame >= Math.Max(1, _meleeFrames.Count / 2))
+        {
+            var attackBounds = GetMeleeAttackBounds();
+            if (!player.IsCrouching && attackBounds.Intersects(player.GetCollisionBounds()))
+            {
+                player.NotifyHit();
+                PlayBigBanditPunchSound();
+                _meleeDamageApplied = true;
+            }
+        }
+
+        if (_shootTimer < MeleeFrameTime)
+        {
+            return;
+        }
+
+        _shootTimer -= MeleeFrameTime;
+        _currentMeleeFrame++;
+        if (_currentMeleeFrame < _meleeFrames.Count)
+        {
+            return;
+        }
+
+        _currentMeleeFrame = 0;
+        _isMeleeAttacking = false;
+        _meleeDamageApplied = false;
+        _bulletCooldown = MeleeCooldown;
+    }
+
     public void NotifyWebHit()
     {
+        if (!_canTakeWebDamage)
+        {
+            return;
+        }
+
         _webHitFlashTimer = WebHitFlashDuration;
+    }
+
+    public void ApplyWebImpact()
+    {
+        if (_canTakeWebDamage)
+        {
+            NotifyWebHit();
+        }
     }
 
     public bool ApplyDamage(int amount)
@@ -194,7 +288,13 @@ public class Bandit
 
         _health = Math.Max(0, _health - amount);
         _webHitFlashTimer = WebHitFlashDuration;
-        return _health == 0;
+        var died = _health == 0;
+        if (died)
+        {
+            PlayDeathSound();
+        }
+
+        return died;
     }
 
     public Rectangle GetCollisionBounds()
@@ -204,7 +304,7 @@ public class Bandit
             return new Rectangle(0, 0, 0, 0);
         }
 
-        var currentTexture = _isShooting && _shootTexture != null ? _shootTexture : _moveFrames[_currentMoveFrame];
+        var currentTexture = GetCurrentBodyTexture();
         var width = (int)(currentTexture.Width * Scale);
         var height = (int)(currentTexture.Height * Scale);
         var x = (int)_position.X + width / 5;
@@ -284,7 +384,7 @@ public class Bandit
 
             if (playerBulletBounds.Contains(bullet.Position))
             {
-                player.NotifyHit();
+                player.NotifyBulletHit();
                 _bullets.RemoveAt(i);
                 continue;
             }
@@ -323,6 +423,7 @@ public class Bandit
             Life = BulletLifetime,
             Rotation = MathF.Atan2(direction.Y, direction.X)
         });
+        PlayShootSound();
     }
 
     public void Draw(SpriteBatch spriteBatch, Vector2 cameraPosition, float visualYOffset = 0f)
@@ -332,18 +433,7 @@ public class Bandit
             return;
         }
 
-        var currentTexture = _moveFrames[_currentMoveFrame];
-        if (_isShooting)
-        {
-            if (_shootFrames.Count > 0)
-            {
-                currentTexture = _shootFrames[Math.Clamp(_currentShootFrame, 0, _shootFrames.Count - 1)];
-            }
-            else if (_shootTexture != null)
-            {
-                currentTexture = _shootTexture;
-            }
-        }
+        var currentTexture = GetCurrentBodyTexture();
 
         var effects = _facingRight ? SpriteEffects.None : SpriteEffects.FlipHorizontally;
         var visualOffset = new Vector2(0f, visualYOffset);
@@ -362,6 +452,29 @@ public class Bandit
             0f);
 
         DrawBullets(spriteBatch, cameraPosition, visualOffset);
+    }
+
+    private Texture2D GetCurrentBodyTexture()
+    {
+        if (_isMeleeAttacking && _meleeFrames.Count > 0)
+        {
+            return _meleeFrames[Math.Clamp(_currentMeleeFrame, 0, _meleeFrames.Count - 1)];
+        }
+
+        if (_isShooting)
+        {
+            if (_shootFrames.Count > 0)
+            {
+                return _shootFrames[Math.Clamp(_currentShootFrame, 0, _shootFrames.Count - 1)];
+            }
+
+            if (_shootTexture != null)
+            {
+                return _shootTexture;
+            }
+        }
+
+        return _moveFrames[_currentMoveFrame];
     }
 
     private void DrawBullets(SpriteBatch spriteBatch, Vector2 cameraPosition, Vector2 visualOffset)
@@ -405,15 +518,38 @@ public class Bandit
         }
 
         _shootFrames.Clear();
+        foreach (var frame in _meleeFrames)
+        {
+            frame.Dispose();
+        }
+
+        _meleeFrames.Clear();
         _shootTexture?.Dispose();
         _shootTexture = null;
         _bulletSpriteSheet?.Dispose();
         _bulletSpriteSheet = null;
+        _bigBanditPunchSound?.Dispose();
+        _bigBanditPunchSound = null;
+        _bigBanditPunchPlayer?.Dispose();
+        _bigBanditPunchPlayer = null;
+        _shootSoundPlayer?.Dispose();
+        _shootSoundPlayer = null;
+        _deathSoundPlayer?.Dispose();
+        _deathSoundPlayer = null;
         _bullets.Clear();
     }
 
     private void LoadMoveFrames(GraphicsDevice graphicsDevice)
     {
+        if (!string.IsNullOrWhiteSpace(_customMoveFramesZipPath) && File.Exists(_customMoveFramesZipPath))
+        {
+            LoadMoveFramesFromZip(graphicsDevice, _customMoveFramesZipPath);
+            if (_moveFrames.Count > 0)
+            {
+                return;
+            }
+        }
+
         if (!Directory.Exists(MoveFramesFolderPath))
         {
             return;
@@ -430,6 +566,43 @@ public class Bandit
             var texture = Texture2D.FromStream(graphicsDevice, stream);
             ApplyBlackKey(texture);
             _moveFrames.Add(texture);
+        }
+    }
+
+    private void LoadMoveFramesFromZip(GraphicsDevice graphicsDevice, string zipPath)
+    {
+        using var archive = ZipFile.OpenRead(zipPath);
+        var entries = archive.Entries
+            .Where(entry => entry.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in entries)
+        {
+            using var stream = entry.Open();
+            var texture = Texture2D.FromStream(graphicsDevice, stream);
+            ApplyBlackKey(texture);
+            _moveFrames.Add(texture);
+        }
+    }
+
+    private void LoadMeleeFrames(GraphicsDevice graphicsDevice)
+    {
+        if (string.IsNullOrWhiteSpace(_customMeleeFramesZipPath) || !File.Exists(_customMeleeFramesZipPath))
+        {
+            return;
+        }
+
+        using var archive = ZipFile.OpenRead(_customMeleeFramesZipPath);
+        var entries = archive.Entries
+            .Where(entry => entry.FullName.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(entry => entry.FullName, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in entries)
+        {
+            using var stream = entry.Open();
+            var texture = Texture2D.FromStream(graphicsDevice, stream);
+            ApplyBlackKey(texture);
+            _meleeFrames.Add(texture);
         }
     }
 
@@ -459,6 +632,112 @@ public class Bandit
         _isShooting = true;
         _shootTimer = 0f;
         _currentShootFrame = 0;
+    }
+
+    private void BeginMeleeAttack()
+    {
+        _isMeleeAttacking = true;
+        _meleeDamageApplied = false;
+        _shootTimer = 0f;
+        _currentMeleeFrame = 0;
+    }
+
+    private void LoadBigBanditPunchSound()
+    {
+        _bigBanditPunchSound?.Dispose();
+        _bigBanditPunchSound = null;
+        _bigBanditPunchPlayer?.Dispose();
+        _bigBanditPunchPlayer = null;
+        if (_canShoot || !File.Exists(BigBanditPunchSoundPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(BigBanditPunchSoundPath);
+            _bigBanditPunchSound = SoundEffect.FromStream(stream);
+        }
+        catch
+        {
+            _bigBanditPunchSound = null;
+        }
+
+        _bigBanditPunchPlayer = new ExternalMp3Player();
+        if (_bigBanditPunchPlayer.Load(BigBanditPunchSoundPath, 95, repeat: false))
+        {
+            return;
+        }
+
+        _bigBanditPunchPlayer.Dispose();
+        _bigBanditPunchPlayer = null;
+    }
+
+    private void PlayBigBanditPunchSound()
+    {
+        if (_bigBanditPunchSound != null)
+        {
+            _bigBanditPunchSound.Play(0.95f, 0f, 0f);
+            return;
+        }
+
+        _bigBanditPunchPlayer?.PlayFromStart();
+    }
+
+    private void LoadShootSound()
+    {
+        _shootSoundPlayer?.Dispose();
+        _shootSoundPlayer = null;
+        if (!_canShoot || !File.Exists(ShootSoundPath))
+        {
+            return;
+        }
+
+        _shootSoundPlayer = new ExternalMp3Player();
+        if (_shootSoundPlayer.Load(ShootSoundPath, 82, repeat: false))
+        {
+            return;
+        }
+
+        _shootSoundPlayer.Dispose();
+        _shootSoundPlayer = null;
+    }
+
+    private void PlayShootSound()
+    {
+        _shootSoundPlayer?.PlayFromStart();
+    }
+
+    private void LoadDeathSound()
+    {
+        _deathSoundPlayer?.Dispose();
+        _deathSoundPlayer = null;
+        if (!File.Exists(DeathSoundPath))
+        {
+            return;
+        }
+
+        _deathSoundPlayer = new ExternalMp3Player();
+        if (_deathSoundPlayer.Load(DeathSoundPath, 88, repeat: false))
+        {
+            return;
+        }
+
+        _deathSoundPlayer.Dispose();
+        _deathSoundPlayer = null;
+    }
+
+    private void PlayDeathSound()
+    {
+        _deathSoundPlayer?.PlayFromStart();
+    }
+
+    private Rectangle GetMeleeAttackBounds()
+    {
+        var bounds = GetCollisionBounds();
+        var width = Math.Max(34, bounds.Width);
+        var x = _facingRight ? bounds.Right : bounds.Left - width;
+        return new Rectangle(x, bounds.Y, width, bounds.Height);
     }
 
     private static Texture2D? LoadTexture(GraphicsDevice graphicsDevice, string contentFileName, string externalSourcePath)
