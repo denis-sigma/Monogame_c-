@@ -23,7 +23,8 @@ internal sealed class ExternalMp3Player : IDisposable
         try
         {
             _player = Activator.CreateInstance(playerType);
-            _player.settings.volume = Math.Clamp(volume, 0, 100);
+            var adjustedVolume = repeat ? volume : volume + 20;
+            _player.settings.volume = Math.Clamp(adjustedVolume, 0, 100);
             _player.settings.setMode("loop", repeat);
             _player.URL = path;
             _player.controls.stop();

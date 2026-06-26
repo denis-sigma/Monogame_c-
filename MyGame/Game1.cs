@@ -67,7 +67,7 @@ public class Game1 : Game
 
     protected override void Initialize()
     {
-        Window.Title = "Человек-Паук: День в Урфу [BUILD 2026-04-29-FIX4]";
+        Window.Title = "Человек-Паук: День в Урфу";
         _graphics.ApplyChanges();
         base.Initialize();
     }
@@ -219,7 +219,7 @@ public class Game1 : Game
         {
             MediaPlayer.Stop();
             MediaPlayer.IsRepeating = true;
-            MediaPlayer.Volume = 0.65f;
+            MediaPlayer.Volume = 0.35f;
             MediaPlayer.Play(_themeSong);
             _isThemeMusicStarted = true;
         }
@@ -238,7 +238,7 @@ public class Game1 : Game
 
         StopThemeMusic();
         _themeMp3Player = new ExternalMp3Player();
-        if (!_themeMp3Player.Load(ThemeSongPath, 65, repeat: true))
+        if (!_themeMp3Player.Load(ThemeSongPath, 35, repeat: true))
         {
             _themeMp3Player.Dispose();
             _themeMp3Player = null;
@@ -265,6 +265,7 @@ public class Game1 : Game
         }
 
         _isMciThemeOpen = true;
+        mciSendString("setaudio SpiderTheme volume to 350", IntPtr.Zero, 0, IntPtr.Zero);
         var playResult = mciSendString("play SpiderTheme repeat", IntPtr.Zero, 0, IntPtr.Zero);
         if (playResult == 0)
         {
@@ -408,7 +409,7 @@ public class Game1 : Game
             }
             catch
             {
-                // Try the next candidate path.
+
             }
         }
 

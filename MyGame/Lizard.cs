@@ -471,7 +471,7 @@ public class Lizard
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 
@@ -510,7 +510,7 @@ public class Lizard
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 
@@ -542,7 +542,7 @@ public class Lizard
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 

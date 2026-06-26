@@ -419,7 +419,7 @@ public class DoctorOctopus
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 
@@ -458,7 +458,7 @@ public class DoctorOctopus
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 
@@ -490,7 +490,7 @@ public class DoctorOctopus
         }
         catch
         {
-            // Sound playback should never interrupt the fight.
+
         }
     }
 
